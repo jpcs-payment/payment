@@ -81,7 +81,7 @@ Deno.serve(async(req)=>{
     }
     if(action==='members.create'){
       if(profile.role==='member')return response({error:'Officer access required.'},403)
-      const {fullName,email,password,yearLevel}=input
+      const {fullName,email,password,yearLevel,role}=input
       if(typeof fullName!=='string'||!fullName.trim())return response({error:'Please enter a valid full name.'},400)
       if(typeof email!=='string'||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()))return response({error:'Please enter a valid email address.'},400)
       if(typeof password!=='string'||password.length<6||password.length>128)return response({error:'Default password must be at least 6 characters.'},400)
@@ -89,7 +89,9 @@ Deno.serve(async(req)=>{
       if(!yl||yl<1||yl>4)return response({error:'Select a valid year level.'},400)
       const trimmedName=fullName.trim()
       const trimmedEmail=email.trim().toLowerCase()
-      const {data:created,error:createError}=await admin.auth.admin.createUser({email:trimmedEmail,password,email_confirm:true,user_metadata:{full_name:trimmedName}})
+      const allowedRoles=['member','treasurer','auditor','admin']
+      const requestedRole=typeof role==='string'&&allowedRoles.includes(role)?role:'member'
+      if(requestedRole!=='member'&&profile.role!=='admin')return response({error:'Only administrators can assign officer or admin roles.'},403)
       if(createError){
         const msg=createError.message||'Could not create member account.'
         if(/already|registered|exists/i.test(msg))return response({error:'An account with this email already exists.'},409)
@@ -97,7 +99,7 @@ Deno.serve(async(req)=>{
       }
       const userId=created.user?.id
       if(!userId)return response({error:'Could not create member account. Please try again.'},500)
-      const {error:profileError}=await admin.from('profiles').insert({id:userId,full_name:trimmedName,email:trimmedEmail,year_level:yl,role:'member',must_change_password:true})
+      const {error:profileError}=await admin.from('profiles').insert({id:userId,full_name:trimmedName,email:trimmedEmail,year_level:yl,role:requestedRole,must_change_password:true})
       if(profileError){
         await admin.auth.admin.deleteUser(userId).catch(()=>{})
         const msg=profileError.message||''

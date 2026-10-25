@@ -310,6 +310,7 @@ function AddMemberModal({ onClose, onCreated, notify }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('JPCS2026')
   const [yearLevel, setYearLevel] = useState('')
+const [role, setRole] = useState('member')
   const [show, setShow] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -322,7 +323,7 @@ function AddMemberModal({ onClose, onCreated, notify }) {
     if (yearLevel < '1' || yearLevel > '4') { setErr('Select a valid year level.'); return }
     setBusy(true)
     try {
-      await api('/api/members/create', { method: 'POST', body: JSON.stringify({ fullName: fullName.trim(), email: email.trim(), password, yearLevel: Number(yearLevel) }) }, 'request')
+      await api('/api/members/create', { method: 'POST', body: JSON.stringify({ fullName: fullName.trim(), email: email.trim(), password, yearLevel: Number(yearLevel), role }) }, 'request')
       notify('Member account created.')
       onCreated()
       onClose()
@@ -346,6 +347,13 @@ function AddMemberModal({ onClose, onCreated, notify }) {
         <option value="2">2nd Year</option>
         <option value="3">3rd Year</option>
         <option value="4">4th Year</option>
+      </select>
+      <label className="form-label" htmlFor="am-role">Role</label>
+      <select id="am-role" className="modal-input" value={role} onChange={e => setRole(e.target.value)}>
+        <option value="member">Member</option>
+        <option value="treasurer">Treasurer · Officer</option>
+        <option value="auditor">Auditor · Officer</option>
+        <option value="admin">Administrator</option>
       </select>
       <div className="modal-actions"><button type="button" className="outline-btn" onClick={onClose} disabled={busy}>Cancel</button><button type="submit" className="primary" disabled={busy}>{busy ? 'Creating…' : 'Create member'}</button></div>
     </form>
