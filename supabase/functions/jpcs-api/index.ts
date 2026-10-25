@@ -108,6 +108,16 @@ Deno.serve(async(req)=>{
       }
       return response({ok:true})
     }
+    if(action==='members.role'){
+      if(profile.role!=='admin')return response({error:'Administrator permissions are required.'},403)
+      const {userId,role}=input
+      const allowed=['member','treasurer','auditor','admin']
+      if(typeof userId!=='string'||!userId)return response({error:'Member ID is required.'},400)
+      if(typeof role!=='string'||!allowed.includes(role))return response({error:'Select a valid role.'},400)
+      const {error:updateError}=await admin.from('profiles').update({role}).eq('id',userId)
+      if(updateError)return response({error:updateError.message||'Could not update role.'},400)
+      return response({ok:true})
+    }
     if(profile.must_change_password)return response({error:'Change your password before using JPCS Pay.'},403)
 
     if(action==='events.register_free'){
