@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "test:parser": "node --test src/lib/studentDirectoryParser.test.js src/lib/studentDirectoryPdf.test.js",
     "provision": "node scripts/provision-users.js"
   },
   "dependencies": {
@@ -14,6 +15,7 @@
     "@zxing/browser": "^0.2.1",
     "dotenv": "^16.4.7",
     "lucide-react": "^0.468.0",
+    "pdfjs-dist": "^4.10.38",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

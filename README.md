@@ -9,7 +9,7 @@ React/Vite portal backed by Supabase Auth, Postgres/RLS, private Storage, and a 
 
 ## Supabase setup/deploy
 
-The existing project already has migrations 001 and 002 applied. Apply `003_admin_member_workspace.sql` (lets the Admin use their own member workspace) and `004_email_outbox_claim.sql` before deploying the current function. For a new project, apply migration 001, then 002, 003, and 004 in order.
+Apply migrations 003 through 012 in order after 001 and 002. Migrations 007 and 008 add Pay Later tracking and enable it by default for events; 009 adds audited payment deletion, 010 adds audited Pay Later-obligation deletion, 011 adds Pay Later QR tokens that the scanner recognizes but does not admit until payment approval, and 012 reuses the same QR after approval. Pay Later choices are stored as unpaid registration obligations and appear separately in the member and admin Payments views; actual later payments still use the normal approval queue.
 
 Install/login to the Supabase CLI, link the project, then deploy:
 
@@ -56,6 +56,7 @@ For local account provisioning only, keep `SUPABASE_URL` and `SUPABASE_SERVICE_R
 - Supabase password login and enforced initial password change.
 - Live event, member, payment, and pass data; officer event management, payment review, member directory, filters, and CSV export.
 - Cash/GCash/MariBank installment submissions with private receipt uploads.
+- Optional Pay Later per event, opt-in at member checkout, a 3-day due date, an email reminder, and separate unpaid-obligation views.
 - Transactional approval/balance/pass issuance, deduplicated email outbox, Brevo email with attached final QR pass, secure receipt links, and single-use officer check-in.
 - Admin check-in scanner with event selection, continuous QR scanning, duplicate and wrong-event rejection, photo/manual fallbacks, and live entry counts.
 - Admin accounts can switch dashboard workspace in Settings without changing server-side authorization.

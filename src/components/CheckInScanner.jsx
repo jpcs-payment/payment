@@ -20,7 +20,7 @@ function ResultCard({result}){
   if(!result)return <div className="scanner-result scanner-result-card idle"><div className="result-head"><ScanLine size={20}/><div><b>Ready to scan</b><small>Point the camera at a member's entrance pass.</small></div></div></div>
   const Icon=result.kind==='valid'?CheckCircle2:result.kind==='warning'?AlertTriangle:result.kind==='checking'?RefreshCw:XCircle
   const iconColor=result.kind==='valid'?'#15803d':result.kind==='invalid'?'#dc2626':result.kind==='warning'?'#b45309':'inherit'
-  const title=result.kind==='valid'?'Check-in successful':result.kind==='warning'?'Already checked in':result.kind==='checking'?'Checking pass…':result.kind==='invalid'&&(result.title==='Wrong event')?'Wrong event':result.title==='Invalid pass'?'Invalid pass':'Scan result'
+  const title=result.kind==='valid'?'Check-in successful':result.title==='Pay Later'?'Pay Later · Not an entrance pass':result.kind==='warning'?'Already checked in':result.kind==='checking'?'Checking pass…':result.kind==='invalid'&&(result.title==='Wrong event')?'Wrong event':result.title==='Invalid pass'?'Invalid pass':'Scan result'
   return <div className={`scanner-result scanner-result-card ${result.kind}`} role="status" aria-live="polite">
     <div className="result-head"><Icon size={22} color={iconColor}/><div><b>{title}</b>{result.message&&<small>{result.message}</small>}</div></div>
     {(result.member||result.event||result.checkedInAt)&&<div className="result-details">
@@ -79,7 +79,10 @@ export default function CheckInScanner({events,passes,api,onCheckedIn}){
 
   const selectedEvent=sortedEvents.find(e=>e.id===eventId)
   const eventPasses=useMemo(()=>passes.filter(p=>(p.event?.id||p.registration?.event_id)===eventId),[passes,eventId])
+  const attendance=useMemo(()=>eventPasses.filter(p=>!p.pay_later&&p.checked_in_at).sort((a,b)=>new Date(b.checked_in_at)-new Date(a.checked_in_at)),[eventPasses])
   const checkedCount=eventPasses.filter(p=>p.checked_in_at).length
+  const entrancePasses=eventPasses.filter(p=>!p.pay_later)
+  const payLaterCount=eventPasses.filter(p=>p.pay_later).length
   const secureContext=typeof window==='undefined'||window.isSecureContext
   const liveCameraAvailable=secureContext&&!!navigator.mediaDevices?.getUserMedia
 
@@ -127,6 +130,9 @@ export default function CheckInScanner({events,passes,api,onCheckedIn}){
       }else if(data.checkedIn){
         setResult({kind:'warning',title:'Already checked in',member:data.member,event:data.event,checkedInAt:data.checkedInAt,message:'This pass was already used.'})
         onCheckedIn?.({...data,token})
+        navigator.vibrate?.([60,50,60])
+      }else if(data.payLater){
+        setResult({kind:'warning',title:'Pay Later',member:data.member,event:data.event,message:data.message||'This member has an unpaid Pay Later balance and cannot be checked in yet.'})
         navigator.vibrate?.([60,50,60])
       }else if(data.wrongEvent){
         setResult({kind:'invalid',title:'Wrong event',member:data.member,event:data.event,message:data.message||'This pass belongs to a different event.'})
@@ -212,12 +218,17 @@ export default function CheckInScanner({events,passes,api,onCheckedIn}){
     {!secureContext&&!cameraError&&<div className="scanner-notice"><AlertTriangle size={16}/><span>Live camera needs an HTTPS site. You can still use Take photo or manual token entry now.</span></div>}
     <div className="scanner-stats">
       <div className="scanner-stat"><b>{checkedCount}</b><span>Checked in</span></div>
-      <div className="scanner-stat"><b>{eventPasses.length}</b><span>Passes issued</span></div>
-      <div className="scanner-stat"><b>{Math.max(0,eventPasses.length-checkedCount)}</b><span>Remaining</span></div>
+      <div className="scanner-stat"><b>{eventPasses.length}</b><span>QR codes</span></div>
+      <div className="scanner-stat"><b>{payLaterCount}</b><span>Pay Later</span></div>
+      <div className="scanner-stat"><b>{Math.max(0,entrancePasses.length-checkedCount)}</b><span>Remaining entry passes</span></div>
     </div>
+    <section className="attendance-history" aria-labelledby="attendance-history-title">
+      <div className="attendance-history-heading"><div><p className="eyebrow">EVENT RECORD</p><h3 id="attendance-history-title">Attendance history</h3></div><span>{attendance.length}</span></div>
+      {attendance.length ? <div className="table-wrap"><table><thead><tr><th>Member</th><th>Checked in</th></tr></thead><tbody>{attendance.map(pass=><tr key={pass.id}><td data-label="Member"><b>{pass.registration?.profiles?.full_name||'Member'}</b><small className="method">{pass.registration?.profiles?.email||''}</small></td><td data-label="Checked in">{formatDateTime(pass.checked_in_at)}</td></tr>)}</tbody></table></div> : <p className="muted attendance-empty">No one has checked in for this event yet.</p>}
+    </section>
     <div className="scanner-grid">
       <div className="scanner-main">
-        <div className="scanner-camera">
+        <div className={`scanner-camera ${scanning ? 'live' : 'off'}`}>
           <video ref={videoRef} autoPlay muted playsInline/>
           {!scanning&&<div className="scanner-placeholder"><ScanLine size={32}/><b>Camera is off</b><span>Select an event and start the camera, or use Take photo.</span></div>}
           {scanning&&<div className="scanner-frame"><span/></div>}

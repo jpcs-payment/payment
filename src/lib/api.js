@@ -16,6 +16,8 @@ export const api = async (path, options = {}) => {
     action = 'payments.submit'
   } else if (path === '/api/members/create') {
     action = 'members.create'
+  } else if (path === '/api/members/import') {
+    action = 'members.import'
   } else if (path === '/api/events/register-free') {
     action = 'events.register_free'
   } else if (path.startsWith('/api/payments/') && path.endsWith('/review')) {
@@ -85,6 +87,6 @@ export const getReceipt = async (payment) => {
     const { url } = await api(`/api/receipts/${payment.id}`)
     window.open(url, '_blank', 'noopener,noreferrer')
   } catch (e) {
-    window.alert(friendlyError(e.message))
+    throw new Error(friendlyError(e.message))
   }
 }

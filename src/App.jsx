@@ -1,6 +1,8 @@
-﻿import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { supabase } from './lib/supabase'
-import { Activity, AlertTriangle, ArrowRight, Banknote, CalendarDays, Check, CheckCircle2, ChevronRight, CircleHelp, Clock3, CreditCard, Download, ExternalLink, FileImage, Home, Landmark, LogOut, Menu, Moon, Pencil, Plus, QrCode, RefreshCw, ScanLine, Search, Settings, ShieldCheck, Sun, Ticket, Users, Wallet, X } from 'lucide-react'
+import { Activity, AlertTriangle, ArrowRight, Banknote, CalendarDays, Check, CheckCircle2, ChevronRight, CircleHelp, Clock3, CreditCard, Download, ExternalLink, FileImage, Home, Landmark, LogOut, Maximize2, Menu, Minimize2, Moon, MoreHorizontal, Pencil, Plus, QrCode, RefreshCw, ScanLine, Search, Settings, ShieldCheck, Sun, Ticket, Trash2, Upload, Users, Wallet, X } from 'lucide-react'
+import { extractStudentDirectoryPdf, fingerprintFile, MAX_DIRECTORY_PDF_BYTES } from './lib/studentDirectoryPdf'
 
 const CheckInScanner = lazy(() => import('./components/CheckInScanner'))
 
@@ -150,8 +152,16 @@ const api = async (path, options = {}, context = 'request') => {
   if (path === '/api/profile') action = options.method === 'PATCH' ? 'profile.update' : 'profile.get'
   else if (path === '/api/profile/password') action = 'profile.password'
   else if (path === '/api/members/create') action = 'members.create'
+  else if (path === '/api/members/import') action = 'members.import'
   else if (path === '/api/members/role') action = 'members.role'
+  else if (path === '/api/members/update') action = 'members.update'
+  else if (path === '/api/members/delete') action = 'members.delete'
+  else if (path === '/api/events/delete') action = 'events.delete'
+  else if (path === '/api/pay-later') action = 'payments.pay_later'
+  else if (path === '/api/payments/delete') action = 'payments.delete'
+  else if (path === '/api/pay-later/delete') action = 'payments.pay_later.delete'
   else if (path === '/api/payments') action = 'payments.submit'
+  else if (path === '/api/payments/reviewer') action = 'payments.reviewer'
   else if (/^\/api\/payments\/[^/]+\/review$/.test(path)) { action = 'payments.review'; params.paymentId = segments.at(-2) }
   else if (path.startsWith('/api/passes/') && path.endsWith('/check-in')) { action = 'passes.checkin'; params.token = decodeURIComponent(segments.at(-2)) }
   else if (path.startsWith('/api/receipts/')) { action = 'receipts.url'; params.paymentId = segments.at(-1) }
@@ -181,7 +191,7 @@ const downloadReport = items => {
 }
 
 function AuthFrame({ dark, children }) {
-  return <main className={`login-screen ${dark ? 'dark' : ''}`}><div className="login-card">{children}</div></main>
+  return <main className={`login-screen ${dark ? 'dark' : ''}`}><section className="login-story"><div className="login-story-brand"><img src="/images/jpcs-logo.png" alt="" /><span>JPCS <small>PAYMENT PORTAL</small></span></div><div className="login-story-copy"><p className="login-story-eyebrow">YOUR CAMPUS, IN ONE PLACE</p><h2>Make every<br />event <span>count.</span></h2><div className="login-story-visual" aria-hidden="true"><i /><i /><i /><i /><i /></div><p>One place to follow JPCS events, manage registrations, and keep your payments on track.</p><div className="login-story-caption">Your JPCS activities, all in sync.</div></div><div className="login-story-footer">JPCS · Payment Portal</div></section><section className="login-panel"><div className="login-card">{children}</div></section></main>
 }
 function ErrorBox({ text, onClose }) {
   if (!text) return null
@@ -196,18 +206,34 @@ function PanelTitle({ eyebrow, title, action }) {
 function Stat({ icon, label, value, color }) {
   return <div className="stat-card"><div className="stat-top"><div className={`stat-icon ${color}`}>{icon}</div></div><span className="stat-label">{label}</span><strong>{value}</strong></div>
 }
-function Modal({ children, onClose, className = '', labelledBy }) {
+function Modal({ children, onClose, onEscape, className = '', labelledBy, contentHidden = false }) {
   useEffect(() => {
-    const onKey = e => { if (e.key === 'Escape') onClose() }
+    const onKey = e => { if (e.key === 'Escape') (onEscape || onClose)() }
     document.addEventListener('keydown', onKey)
     const prev = document.body.style.overflow
     document.body.style.overflow = 'hidden'
     return () => { document.removeEventListener('keydown', onKey); document.body.style.overflow = prev }
-  }, [onClose])
-  return <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}><div className={`modal ${className}`} role="dialog" aria-modal="true" aria-labelledby={labelledBy}>{children}</div></div>
+  }, [onClose, onEscape])
+  return <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}><div className={`modal ${className}`} role="dialog" aria-modal="true" aria-labelledby={labelledBy} aria-hidden={contentHidden || undefined}>{children}</div></div>
 }
 function ModalClose({ onClick }) {
   return <button type="button" className="icon-button" onClick={onClick} aria-label="Close"><X size={18} /></button>
+}
+
+function ConfirmModal({ title = 'Please confirm', message, confirmText = 'Confirm', destructive = false, onConfirm, onClose }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const close = () => { if (!busy) onClose() }
+  const confirm = async () => {
+    setBusy(true); setError('')
+    try { await onConfirm(); onClose() } catch (ex) { setError(ex.message || 'The action could not be completed.') } finally { setBusy(false) }
+  }
+  return <Modal onClose={close} className="confirm-modal">
+    <div className="modal-heading"><div><p className="eyebrow">CONFIRM ACTION</p><h2>{title}</h2></div><ModalClose onClick={close} /></div>
+    <p className="confirm-modal-message">{message}</p>
+    {error && <ErrorBox text={error} />}
+    <div className="modal-actions"><button type="button" className="outline-btn" onClick={close} disabled={busy}>Cancel</button><button type="button" className={destructive ? 'reject-btn solid' : 'primary'} onClick={confirm} disabled={busy}>{busy ? 'Please wait…' : confirmText}</button></div>
+  </Modal>
 }
 
 function EventCard({ event, registration, onPay, isAdmin, onEdit }) {
@@ -218,24 +244,33 @@ function EventCard({ event, registration, onPay, isAdmin, onEdit }) {
   const used = paid + pendingAmt
   const remaining = Math.max(0, price - used)
   const fullyPaid = status === 'Fully paid' || remaining <= 0
-  const statusText = status === 'Fully paid' ? 'Fully paid' : status === 'Partially paid' ? `Partially paid · ${money(paid)} paid` : status === 'Pending verification' ? 'Pending verification' : status === 'Rejected' ? 'Rejected' : 'Unpaid'
+  const payLaterActive = !!registration?.pay_later_started_at && !fullyPaid
+  const paymentProgress = price > 0 ? Math.min(100, Math.round(paid / price * 100)) : 100
+  const statusText = payLaterActive ? `Pay Later · due ${date(registration.pay_later_due_at)}` : status === 'Fully paid' ? 'Fully paid' : status === 'Partially paid' ? `Partially paid · ${money(paid)} paid` : status === 'Pending verification' ? 'Pending verification' : status === 'Rejected' ? 'Rejected' : 'Unpaid'
   return <article className="event-card">
-    <div className="event-art"><CalendarDays size={30} /><small>{event.venue || 'JPCS event'}</small></div>
+    <div className="event-art"><Ticket size={34} strokeWidth={1.7} /><small>{event.venue || 'JPCS event'}</small></div>
     <div className="event-detail">
       <div className="event-date"><Clock3 size={14} />{date(event.event_date)}</div>
       <h3>{event.name}</h3>
       <p className="muted event-description">{event.description || 'Join us at this JPCS event.'}</p>
+      {!isAdmin && <div className="event-payment-progress"><div><span>Payment progress</span><b>{paymentProgress}%</b></div><progress max="100" value={paymentProgress} aria-label={`Payment progress for ${event.name}`} /></div>}
       <div className="event-bottom">
-        <div className="event-price-box"><b>{money(price)}</b><small className="method">{statusText}</small></div>
-        {isAdmin ? <button type="button" className="pay-button secondary" onClick={onEdit}><Pencil size={14} /> Edit</button> : <button type="button" className="pay-button" disabled={fullyPaid || status === 'Pending verification'} onClick={onPay}>{fullyPaid ? 'Paid' : status === 'Pending verification' ? 'Pending' : 'Pay'} <ArrowRight size={13} /></button>}
+        <div className="event-price-box"><b>{money(price)}</b>{!isAdmin && <small className="method">{statusText}</small>}</div>
+        {isAdmin ? <button type="button" className="pay-button secondary" onClick={onEdit}><Pencil size={14} /> Edit</button> : <button type="button" className="pay-button" disabled={fullyPaid || status === 'Pending verification'} onClick={onPay}>{fullyPaid ? 'Paid' : status === 'Pending verification' ? 'Pending' : payLaterActive ? 'Pay now' : 'Pay'} <ArrowRight size={13} /></button>}
       </div>
     </div>
   </article>
 }
 
 function PaymentTable({ items, admin, onOpen }) {
+  const [page, setPage] = useState(1)
+  const pageSize = 5
+  const pageCount = Math.max(1, Math.ceil(items.length / pageSize))
+  const currentPage = Math.min(page, pageCount)
+  const pageItems = items.slice((currentPage - 1) * pageSize, currentPage * pageSize)
+  useEffect(() => { setPage(1) }, [items])
   return <div className="table-wrap"><table><thead><tr><th>Event / Member</th><th>Date · Method</th><th>Amount</th><th>Status</th><th>Details</th></tr></thead><tbody>
-    {items.map(p => {
+    {pageItems.map(p => {
       const reg = p.registrations || p.registration || {}
       const member = reg.profiles || p.profiles || {}
       const ev = reg.events || p.event || {}
@@ -250,7 +285,49 @@ function PaymentTable({ items, admin, onOpen }) {
         <td data-label="Details">{admin ? <button type="button" className="text-button" onClick={e => { e.stopPropagation(); onOpen(p) }}>View / Review</button> : <button type="button" className="text-button" onClick={e => { e.stopPropagation(); onOpen(p) }}>View details</button>}</td>
       </tr>
     })}
-  </tbody></table>{!items.length && <Empty text="No payment submissions yet." />}</div>
+  </tbody></table>{!items.length && <Empty text="No payment submissions yet." />}<PaginationControls total={items.length} page={currentPage} pageSize={pageSize} onPageChange={setPage} /></div>
+}
+
+function PayLaterTable({ registrations, onDelete, canDelete }) {
+  const obligations = registrations.filter(reg => reg.pay_later_started_at && Number(reg.price) > (reg.payments || []).filter(p => p.state === 'approved').reduce((sum, p) => sum + Number(p.amount || 0), 0))
+  return <section className="pay-later-admin-section">
+    <div className="pay-later-admin-heading"><div><p className="eyebrow">UNPAID OBLIGATIONS</p><h2>Pay Later</h2></div><span>{obligations.length}</span></div>
+    <div className="table-wrap"><table><thead><tr><th>Event / Member</th><th>Selected</th><th>Due date</th><th>Outstanding</th><th>Status</th>{canDelete && <th>Action</th>}</tr></thead><tbody>
+      {obligations.map(reg => {
+        const payments = reg.payments || []
+        const approved = payments.filter(p => p.state === 'approved').reduce((sum, p) => sum + Number(p.amount || 0), 0)
+        const pending = payments.filter(p => p.state === 'pending').length > 0
+        const member = reg.profiles || {}
+        const remaining = Math.max(0, Number(reg.price || 0) - approved)
+        const overdue = new Date(reg.pay_later_due_at) < new Date()
+        return <tr key={reg.id}><td data-label="Event / Member"><b>{reg.events?.name || 'Event'}</b><small className="method">{member.full_name || 'Member'} · {member.email || ''}</small></td><td data-label="Selected">{dateTime(reg.pay_later_started_at)}</td><td data-label="Due date">{dateTime(reg.pay_later_due_at)}</td><td data-label="Outstanding" className="amount-cell">{money(remaining)}</td><td data-label="Status"><span className={`status ${overdue ? 'rejected' : 'pending'}`}><i />{pending ? 'Payment pending approval' : overdue ? 'Overdue · unpaid' : 'Unpaid'}</span></td>{canDelete && <td data-label="Action"><button type="button" className="outline-btn small member-delete-btn" onClick={() => onDelete(reg)}><Trash2 size={14} />Delete</button></td>}</tr>
+      })}
+    </tbody></table>{!obligations.length && <Empty text="No unpaid Pay Later obligations." />}</div>
+  </section>
+}
+
+function MyPayLaterTable({ registrations }) {
+  const obligations = registrations.filter(reg => reg.pay_later_started_at && Number(reg.price) > (reg.payments || []).filter(p => p.state === 'approved').reduce((sum, p) => sum + Number(p.amount || 0), 0))
+  if (!obligations.length) return null
+  return <section className="pay-later-admin-section my-pay-later-section">
+    <div className="pay-later-admin-heading"><div><p className="eyebrow">PAY LATER</p><h2>Unpaid event balances</h2></div><span>{obligations.length}</span></div>
+    <div className="table-wrap"><table><thead><tr><th>Event</th><th>Selected</th><th>Due date</th><th>Balance</th><th>Status</th></tr></thead><tbody>
+      {obligations.map(reg => {
+        const payments = reg.payments || []
+        const approved = payments.filter(p => p.state === 'approved').reduce((sum, p) => sum + Number(p.amount || 0), 0)
+        const pending = payments.some(p => p.state === 'pending')
+        const overdue = new Date(reg.pay_later_due_at) < new Date()
+        return <tr key={reg.id}><td data-label="Event"><b>{reg.events?.name || 'Event'}</b></td><td data-label="Selected">{dateTime(reg.pay_later_started_at)}</td><td data-label="Due date">{dateTime(reg.pay_later_due_at)}</td><td data-label="Balance" className="amount-cell">{money(Math.max(0, Number(reg.price || 0) - approved))}</td><td data-label="Status"><span className={`status ${pending ? 'pending' : overdue ? 'rejected' : 'pending'}`}><i />{pending ? 'Payment pending approval' : overdue ? 'Overdue · unpaid' : 'Unpaid'}</span></td></tr>
+      })}
+    </tbody></table></div>
+  </section>
+}
+
+function PaginationControls({ total, page, pageSize = 5, onPageChange }) {
+  const pageCount = Math.max(1, Math.ceil(total / pageSize))
+  const first = total ? (page - 1) * pageSize + 1 : 0
+  const last = Math.min(page * pageSize, total)
+  return <div className="pagination-controls"><span className="pagination-summary">Showing {first}–{last} of {total}</span><div><button type="button" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>Previous</button><span>Page {page} of {pageCount}</span><button type="button" disabled={page >= pageCount} onClick={() => onPageChange(page + 1)}>Next</button></div></div>
 }
 
 function PassCard({ pass }) {
@@ -361,9 +438,236 @@ const [role, setRole] = useState('member')
   </Modal>
 }
 
+function MemberEditModal({ member, onClose, onSaved }) {
+  const [fullName, setFullName] = useState(member.full_name || '')
+  const [studentNumber, setStudentNumber] = useState(member.student_number || '')
+  const [yearLevel, setYearLevel] = useState(member.year_level ? String(member.year_level) : '')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const save = async event => {
+    event.preventDefault()
+    setError('')
+    setBusy(true)
+    try {
+      await api('/api/members/update', { method: 'PATCH', body: JSON.stringify({
+        userId: member.id,
+        fullName: fullName.trim(),
+        studentNumber: studentNumber.trim() || null,
+        yearLevel: yearLevel ? Number(yearLevel) : null
+      }) }, 'request')
+      onSaved()
+      onClose()
+    } catch (ex) { setError(ex.message || 'Could not update this member.') } finally { setBusy(false) }
+  }
+  return <Modal onClose={onClose} className="profile-modal">
+    <div className="modal-heading"><div><p className="eyebrow">MEMBER DIRECTORY</p><h2>Edit member</h2></div><ModalClose onClick={onClose} /></div>
+    {error && <ErrorBox text={error} />}
+    <form onSubmit={save} className="modal-form">
+      <label className="form-label" htmlFor="member-edit-name">Full name</label>
+      <input id="member-edit-name" className="modal-input" value={fullName} onChange={event => setFullName(event.target.value)} required minLength={2} maxLength={80} />
+      <label className="form-label" htmlFor="member-edit-email">Email</label>
+      <input id="member-edit-email" className="modal-input" value={member.email || ''} disabled />
+      <label className="form-label" htmlFor="member-edit-number">Student number</label>
+      <input id="member-edit-number" className="modal-input" value={studentNumber} onChange={event => setStudentNumber(event.target.value)} maxLength={40} pattern="[A-Za-z0-9-]*" />
+      <label className="form-label" htmlFor="member-edit-year">Year level</label>
+      <select id="member-edit-year" className="modal-input" value={yearLevel} onChange={event => setYearLevel(event.target.value)}>
+        <option value="">Not specified</option><option value="1">1st Year</option><option value="2">2nd Year</option><option value="3">3rd Year</option><option value="4">4th Year</option>
+      </select>
+      <div className="modal-actions"><button type="button" className="outline-btn" onClick={onClose} disabled={busy}>Cancel</button><button type="submit" className="primary" disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button></div>
+    </form>
+  </Modal>
+}
+
+const validEmail = value => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim())
+
+function MemberImportModal({ onClose, onImported, members }) {
+  const [file, setFile] = useState(null)
+  const [fingerprint, setFingerprint] = useState('')
+  const [records, setRecords] = useState([])
+  const [warnings, setWarnings] = useState([])
+  const [extractedText, setExtractedText] = useState('')
+  const [expectedCountHint, setExpectedCountHint] = useState(null)
+  const [progress, setProgress] = useState(null)
+  const [importProgress, setImportProgress] = useState({ completed: 0, total: 0 })
+  const [processing, setProcessing] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [error, setError] = useState('')
+  const [summary, setSummary] = useState(null)
+  const [expanded, setExpanded] = useState(false)
+  const collapsePreviewRef = useRef(null)
+  const expandPreviewRef = useRef(null)
+  const hadExpandedView = useRef(false)
+  const previewTableRef = useRef(null)
+  const previewScrollPosition = useRef({ top: 0, left: 0 })
+  const busy = processing || importing
+
+  useEffect(() => {
+    if (expanded) {
+      collapsePreviewRef.current?.focus()
+      hadExpandedView.current = true
+    } else if (hadExpandedView.current) {
+      expandPreviewRef.current?.focus()
+      hadExpandedView.current = false
+    }
+    if (previewTableRef.current) {
+      previewTableRef.current.scrollTop = previewScrollPosition.current.top
+      previewTableRef.current.scrollLeft = previewScrollPosition.current.left
+    }
+  }, [expanded])
+
+  const reviewed = useMemo(() => {
+    const seenEmail = new Set(), seenStudent = new Set(), seenRow = new Set(), existingEmail = new Set(), existingStudent = new Set()
+    for (const member of members || []) {
+      if (member.email) existingEmail.add(member.email.trim().toLowerCase())
+      if (member.student_number) existingStudent.add(member.student_number.trim().toLowerCase())
+    }
+    return records.map(record => {
+      const emailKey = record.email.trim().toLowerCase()
+      const studentKey = record.studentNumber.trim().toLowerCase()
+      const rowNumber = record.directoryRow === null || record.directoryRow === '' ? null : Number(record.directoryRow)
+      const repeatedDirectoryRow = Number.isSafeInteger(rowNumber) && seenRow.has(rowNumber)
+      const emailDuplicate = emailKey && (existingEmail.has(emailKey) || seenEmail.has(emailKey))
+      const studentDuplicate = studentKey && (seenStudent.has(studentKey) || existingStudent.has(studentKey))
+      if (Number.isSafeInteger(rowNumber)) seenRow.add(rowNumber)
+      if (emailKey) seenEmail.add(emailKey)
+      if (studentKey) seenStudent.add(studentKey)
+      const requiredIssues = []
+      if (!record.firstName.trim() || !record.lastName.trim()) requiredIssues.push('First and last name are required.')
+      if (!validEmail(record.email)) requiredIssues.push(record.email.trim() ? 'Email address is invalid.' : 'Email address is missing.')
+      if (!/^[1-5]$/.test(String(record.yearLevel || ''))) requiredIssues.push('Year level 1–5 is required.')
+      const optionalIssues = ['studentNumber', 'middleInitial', 'program', 'sex', 'contactNumber', 'address'].filter(key => !String(record[key] || '').trim()).map(key => `${key} is blank.`)
+      const duplicate = Boolean(emailDuplicate || studentDuplicate || repeatedDirectoryRow)
+      const status = record.excluded ? 'excluded' : duplicate ? 'duplicate' : requiredIssues.length ? 'incomplete' : 'valid'
+      return { ...record, status, requiredIssues, optionalIssues, duplicate }
+    })
+  }, [records, members])
+
+  const counts = useMemo(() => reviewed.reduce((result, row) => { result[row.status] += 1; return result }, { valid: 0, incomplete: 0, duplicate: 0, excluded: 0 }), [reviewed])
+  const rowNumbers = reviewed.map(row => row.directoryRow === null || row.directoryRow === '' ? null : Number(row.directoryRow)).filter(Number.isSafeInteger)
+  const repeatedRows = [...new Set(rowNumbers.filter((row, index) => rowNumbers.indexOf(row) !== index))]
+  const distinctNumbers = [...new Set(rowNumbers)].sort((a, b) => a - b)
+  const currentGaps = distinctNumbers.slice(1).flatMap((number, index) => {
+    const previous = distinctNumbers[index]
+    return number - previous > 1 ? [{ from: previous + 1, to: number - 1, count: number - previous - 1 }] : []
+  })
+  const importReady = counts.valid > 0
+
+  const chooseFile = async selected => {
+    if (!selected) return
+    setError(''); setSummary(null); setRecords([]); setWarnings([]); setExtractedText(''); setExpectedCountHint(null); setFingerprint(''); setFile(null)
+    if (selected.type !== 'application/pdf' && !selected.name.toLowerCase().endsWith('.pdf')) { setError('Choose a PDF file.'); return }
+    if (selected.size > MAX_DIRECTORY_PDF_BYTES) { setError('The PDF must be 100 MB or smaller.'); return }
+    setFile(selected); setProcessing(true); setProgress({ phase: 'reading' })
+    try {
+      const [parsed, hash] = await Promise.all([extractStudentDirectoryPdf(selected, setProgress), fingerprintFile(selected)])
+      setRecords(parsed.records); setWarnings(parsed.warnings); setExtractedText(parsed.rawText || ''); setExpectedCountHint(parsed.expectedCountHint); setFingerprint(hash)
+      setProgress({ phase: 'complete', pages: parsed.pageCount, records: parsed.records.length })
+    } catch (ex) { setError(ex.message || 'Could not process this PDF.'); setProgress(null) } finally { setProcessing(false) }
+  }
+
+  const updateRecord = (index, key, value) => setRecords(previous => previous.map((record, row) => row === index ? { ...record, [key]: value } : record))
+  const importRecords = async () => {
+    if (!file || !fingerprint || !importReady) return
+    setImporting(true); setError(''); setSummary(null)
+    const results = []
+    const batchCount = Math.ceil(reviewed.length / 10)
+    setImportProgress({ completed: 0, total: batchCount })
+    try {
+      for (let start = 0; start < reviewed.length; start += 10) {
+        const batch = reviewed.slice(start, start + 10).map(({ status, requiredIssues, optionalIssues, duplicate, ...record }, batchIndex) => ({
+          ...record,
+          recordIndex: start + batchIndex + 1,
+          directoryRow: record.directoryRow === '' || record.directoryRow == null ? null : Number(record.directoryRow),
+          yearLevel: record.yearLevel ? Number(record.yearLevel) : null,
+          excluded: status === 'excluded',
+          duplicateInFile: duplicate,
+          notes: [...requiredIssues, ...optionalIssues]
+        }))
+        try {
+          const response = await api('/api/members/import', { method: 'POST', body: JSON.stringify({ fingerprint, sourceFilename: file.name, expectedRecords: expectedCountHint, detectedRecords: reviewed.length, records: batch }) }, 'request')
+          results.push(...(response.results || []))
+        } catch (ex) {
+          results.push(...batch.map(record => ({ recordIndex: record.recordIndex, directoryRow: record.directoryRow, status: 'failed', reason: ex.message || 'Request failed; retry this file safely.' })))
+          setError(ex.message || 'A batch could not be imported. You can safely retry this file.')
+        } finally { setImportProgress(previous => ({ ...previous, completed: Math.min(previous.completed + 1, previous.total) })) }
+      }
+      const totals = results.reduce((value, row) => { value[row.status] = (value[row.status] || 0) + 1; return value }, {})
+      setSummary({ detected: reviewed.length, imported: totals.imported || 0, accountsCreated: results.filter(row => row.accountCreated).length, duplicate: totals.duplicate || 0, incomplete: totals.incomplete || 0, excluded: totals.excluded || 0, failed: totals.failed || 0, failedAccounts: results.filter(row => row.status === 'failed' && row.failureType === 'account').length, results })
+      if ((totals.imported || 0) > 0) onImported()
+    } catch (ex) { setError(ex.message || 'The import failed. No success has been assumed.') } finally { setImporting(false) }
+  }
+
+  const close = useCallback(() => { if (!busy) onClose() }, [busy, onClose])
+  const handleEscape = useCallback(() => { if (expanded) setExpanded(false); else close() }, [expanded, close])
+  const fields = [
+    ['directoryRow', 'Directory row'], ['studentNumber', 'Student No.'], ['lastName', 'Last Name'], ['firstName', 'First Name'],
+    ['middleInitial', 'Middle Initial'], ['program', 'Program'], ['yearLevel', 'Year Level'], ['sex', 'Sex'],
+    ['email', 'Email'], ['contactNumber', 'Contact Number'], ['address', 'Address']
+  ]
+  const previewTable = <div ref={previewTableRef} className="member-import-table-wrap" role="region" aria-label="Member preview table" tabIndex={0} onScroll={event => { previewScrollPosition.current = { top: event.currentTarget.scrollTop, left: event.currentTarget.scrollLeft } }}><table className="member-import-table"><thead><tr><th>Include</th>{fields.map(([, label]) => <th key={label}>{label}</th>)}<th>Review</th></tr></thead><tbody>{reviewed.map((record, index) => <tr key={`${record.directoryRow}-${index}`} className={`import-row-${record.status}`}>
+    <td data-label="Include"><input type="checkbox" checked={!record.excluded} aria-label={`Include directory record ${record.directoryRow ?? index + 1}`} onChange={event => updateRecord(index, 'excluded', !event.target.checked)} /></td>
+    {fields.map(([key, label]) => <td key={key} data-label={label}><input aria-label={`${label}, directory row ${record.directoryRow ?? index + 1}`} value={record[key] ?? ''} onChange={event => updateRecord(index, key, event.target.value)} disabled={busy || record.excluded} /></td>)}
+    <td data-label="Review"><span className={`import-status ${record.status}`}>{record.status}</span>{record.requiredIssues.map(issue => <small key={issue}>{issue}</small>)}{record.duplicate && <small>Matches another directory row or existing member.</small>}{record.optionalIssues.map(issue => <small className="optional-import-warning" key={issue}>{issue}</small>)}</td>
+  </tr>)}</tbody></table></div>
+
+  return <><Modal onClose={close} onEscape={handleEscape} contentHidden={expanded} className="member-import-modal" labelledBy="member-import-title">
+    <div className="modal-heading"><div><p className="eyebrow">ADMIN · MEMBER DIRECTORY</p><h2 id="member-import-title">Import Members</h2></div><div className="member-import-heading-actions"><button ref={expandPreviewRef} type="button" className="member-import-expand" aria-label="Expand member preview table" disabled={!reviewed.length || Boolean(summary)} onClick={() => setExpanded(true)}><Maximize2 size={16} />Expand Table</button><ModalClose onClick={close} /></div></div>
+    <div className="member-import-body" tabIndex={0} aria-label="Member import content">
+    <p className="muted">Upload a searchable PDF directory. Extracted records are reviewed here before any member accounts or directory data are saved.</p>
+    {!summary && <>
+      <label className={`member-import-dropzone ${processing ? 'processing' : ''} ${file ? 'has-file' : ''}`} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); chooseFile(event.dataTransfer.files?.[0]) }}>
+        <input type="file" accept="application/pdf,.pdf" disabled={busy} onChange={event => { chooseFile(event.target.files?.[0]); event.target.value = '' }} />
+        <Upload size={25} /><b>{file ? file.name : 'Drop the student directory PDF here'}</b><span>{file ? `${(file.size / 1024 / 1024).toFixed(1)} MB` : 'or click to browse · PDF only · up to 100 MB'}</span>
+      </label>
+      {processing && <div className="member-import-progress"><span>{progress?.phase === 'extracting' ? `Reading page ${progress.page} of ${progress.pages}…` : 'Opening and reading PDF…'}</span><progress max={progress?.pages || 1} value={progress?.page || 0} /></div>}
+      {importing && <div className="member-import-progress"><span>Saving batch {importProgress.completed + 1} of {importProgress.total}…</span><progress max={importProgress.total || 1} value={importProgress.completed} /></div>}
+      {error && <ErrorBox text={error} />}
+      {file && !processing && records.length === 0 && warnings.length > 0 && <>
+        <div className="member-import-warnings">{warnings.map((warning, index) => <p key={index}><AlertTriangle size={14} />{warning}</p>)}</div>
+      </>}
+      {file && !processing && extractedText && <details className="member-import-text-diagnostic"><summary>Inspect raw extracted PDF text</summary><pre>{extractedText}</pre></details>}
+      {file && !processing && records.length > 0 && <>
+        <div className="member-import-counts"><div><b>{reviewed.length}</b><span>Detected</span></div><div><b>{counts.valid}</b><span>Valid</span></div><div><b>{counts.incomplete}</b><span>Incomplete</span></div><div><b>{counts.duplicate}</b><span>Duplicates</span></div><div><b>{counts.excluded}</b><span>Excluded</span></div></div>
+        <div className={`member-import-row-check ${currentGaps.length || repeatedRows.length ? 'warning' : 'complete'}`}>
+          {currentGaps.length || repeatedRows.length ? <AlertTriangle size={17} /> : <CheckCircle2 size={17} />}
+          <span>
+            {rowNumbers.length === 0
+              ? `${reviewed.length} records detected; the PDF does not provide clear row numbers.`
+              : `Detected ${reviewed.length} records, numbered ${distinctNumbers[0]}–${distinctNumbers.at(-1)}${currentGaps.length ? `; gaps: ${currentGaps.map(gap => gap.from === gap.to ? gap.from : `${gap.from}–${gap.to}`).join(', ')}` : '; no gaps within the detected range'}${repeatedRows.length ? `; repeated: ${repeatedRows.join(', ')}` : ''}.`}
+            {expectedCountHint != null && ` Document total hint: ${expectedCountHint}.`}
+          </span>
+          {(currentGaps.length || repeatedRows.length) > 0 && <span>Review numbering; rows are not fabricated.</span>}
+        </div>
+        {warnings.length > 0 && <div className="member-import-warnings">{warnings.map((warning, index) => <p key={index}><AlertTriangle size={14} />{warning}</p>)}</div>}
+        {!importReady && <div className="member-import-warnings"><p><AlertTriangle size={14} />Correct at least one record so it has a valid name, email, and year level before confirming the import. Other incomplete records will remain available for review when you import.</p></div>}
+        {!expanded && previewTable}
+        <div className="member-import-password-notice"><ShieldCheck size={18} /><span><b>Initial password: JPCS2026</b><small>New accounts use this initial password and must change it immediately after their first login. No emails are sent during import; communicate the password through an appropriate channel outside the app.</small></span></div>
+        <p className="muted member-import-note">Incomplete, duplicate, and excluded rows are retained in the import directory for review. Only eligible, non-duplicate rows with valid email addresses receive member profiles and login accounts.</p>
+      </>}
+    </>}
+    {summary && <>
+      <div className="member-import-result"><h3>Import results</h3><p>{summary.detected} directory records were submitted for processing.</p><div className="member-import-counts"><div><b>{summary.imported}</b><span>Members imported</span></div><div><b>{summary.accountsCreated}</b><span>Auth accounts created</span></div><div><b>{summary.duplicate}</b><span>Existing skipped</span></div><div><b>{summary.incomplete}</b><span>Needs correction</span></div><div><b>{summary.excluded}</b><span>Excluded</span></div><div><b>{summary.failedAccounts}</b><span>Failed account creation</span></div><div><b>{summary.failed}</b><span>Total failed</span></div></div></div>
+      <div className="member-import-password-notice"><ShieldCheck size={18} /><span><b>Initial password: JPCS2026</b><small>New accounts must change it at first login. No emails were sent during this import.</small></span></div>
+      {error && <ErrorBox text={error} />}
+      {summary.results.some(row => row.status === 'failed') && <div className="member-import-warnings">{summary.results.filter(row => row.status === 'failed').map((row, index) => <p key={`${row.directoryRow}-${index}`}><AlertTriangle size={14} />Row {row.directoryRow}: {row.reason || 'Could not import this record.'}</p>)}</div>}
+    </>}
+    </div>
+    <div className="modal-actions member-import-footer">
+      {summary
+        ? <><button type="button" className="outline-btn" onClick={() => setSummary(null)}>Back to preview</button><button type="button" className="primary" onClick={close}>Done</button></>
+        : <><button type="button" className="outline-btn" onClick={close} disabled={busy}>Cancel</button><button type="button" className="primary" disabled={busy || !importReady || !fingerprint} onClick={importRecords}>{importing ? 'Importing…' : 'Import Members'}</button></>}
+    </div>
+  </Modal>{expanded && createPortal(<div className="member-import-fullscreen" role="dialog" aria-modal="true" aria-label="Expanded member preview">
+    <div className="member-import-fullscreen-toolbar"><strong>Member Preview <span>{reviewed.length} records</span></strong><button ref={collapsePreviewRef} type="button" className="member-import-expand" aria-label="Collapse member preview table" onClick={() => setExpanded(false)}><Minimize2 size={16} />Collapse Table</button></div>
+    {previewTable}
+  </div>, document.body)}</>
+}
+
 function PaymentModal({ event, registration, onClose, onSubmitted, setError }) {
   const [method, setMethod] = useState('')
+  const [payLater, setPayLater] = useState(false)
   const [amount, setAmount] = useState('')
+  const amountEdited = useRef(false)
   const [reference, setReference] = useState('')
   const [file, setFile] = useState(null)
   const [fileError, setFileError] = useState('')
@@ -377,7 +681,7 @@ function PaymentModal({ event, registration, onClose, onSubmitted, setError }) {
   const pendingAmt = payments.filter(p => p.state === 'pending').reduce((a, p) => a + Number(p.amount || 0), 0)
   const used = approved + pendingAmt
   const remaining = Math.max(0, price - used)
-  useEffect(() => { if (!amount && remaining > 0) setAmount(String(remaining)) }, [remaining, amount])
+  useEffect(() => { if (!amountEdited.current && !amount && remaining > 0) setAmount(String(remaining)) }, [remaining, amount])
   const meta = METHOD_META[method] || { label: method, description: '', icon: Wallet, qr: null }
   const Icon = meta.icon
   const handleFile = e => {
@@ -392,6 +696,11 @@ function PaymentModal({ event, registration, onClose, onSubmitted, setError }) {
     e.preventDefault()
     setBusy(true); setErr(''); setError('')
     try {
+      if (payLater) {
+        const result = await api('/api/pay-later', { method: 'POST', body: JSON.stringify({ eventId: event.id }) }, 'payment')
+        onSubmitted({ payLater: true, dueAt: result.registration?.pay_later_due_at, eventName: event.name, emailDelivery: result.email })
+        return
+      }
       if (!methods.length) throw new Error('No payment methods are configured for this event.')
       const value = Number(amount)
       if (!Number.isFinite(value) || value <= 0) throw new Error('Enter a valid amount.')
@@ -420,38 +729,41 @@ function PaymentModal({ event, registration, onClose, onSubmitted, setError }) {
     {remaining <= 0 && <ErrorBox text="This event is fully paid or already has a pending submission covering the balance." />}
     {(err || fileError) && <ErrorBox text={err || fileError} onClose={() => { setErr(''); setFileError('') }} />}
     <form onSubmit={submit} className="modal-form">
-      <label className="form-label">Payment method</label>
-      <div className="method-cards" role="radiogroup" aria-label="Payment method">
+      {event.pay_later_enabled && price > 0 && !registration?.pay_later_started_at && <label className="checkbox pay-later-user-toggle"><input type="checkbox" checked={payLater} disabled={busy} onChange={e => setPayLater(e.target.checked)} />Enable Pay Later for this payment <small>Due within 3 days. Leave unchecked to submit a Cash, GCash, or MariBank payment normally.</small></label>}
+      {registration?.pay_later_started_at && <div className="cash-note pay-later-note"><Clock3 size={18} /><p>Pay Later is already active for this event, due {dateTime(registration.pay_later_due_at)}. To pay now, select Cash, GCash, or MariBank below. This will not create another Pay Later obligation.</p></div>}
+      {!payLater && <label className="form-label">Payment method</label>}
+      {!payLater && <div className="method-cards" role="radiogroup" aria-label="Payment method">
         {methods.map(m => {
           const mm = METHOD_META[m]
           const MIcon = mm.icon
           const selected = method === m
-          return <button type="button" key={m} role="radio" aria-checked={selected} className={`method-card ${selected ? 'selected' : ''}`} onClick={() => setMethod(m)}>
+          return <button type="button" key={m} role="radio" aria-checked={selected && !payLater} className={`method-card ${selected && !payLater ? 'selected' : ''}`} onClick={() => { setMethod(m); setPayLater(false) }}>
             <div className="method-card-top"><MIcon size={18} /><span>{mm.label}</span>{selected && <CheckCircle2 size={16} className="check" />}</div>
             <p className="muted">{mm.description}</p>
           </button>
         })}
-      </div>
-      {methods.length === 0 && <ErrorBox text="No payment methods are configured for this event." />}
-      {meta.qr && <div className="qr-payment"><div className="qr-frame"><img src={meta.qr} alt={`${meta.label} QR code`} /></div><p className="muted">Scan the QR code with your e-wallet, then upload a clear screenshot or photo of your receipt.</p></div>}
-      {method === 'cash' && <div className="cash-note"><Banknote size={18} /><p>Pay in person to a JPCS officer. No receipt upload is needed.</p></div>}
-      <div className="form-row">
-        <div className="form-field"><label className="form-label" htmlFor="pay-amount">Amount to submit</label><input id="pay-amount" className="modal-input" name="amount" type="number" min="0.01" step="0.01" max={remaining} value={amount} onChange={e => setAmount(e.target.value)} required /></div>
-      </div>
-      {method !== 'cash' && <><label className="form-label" htmlFor="pay-ref">Transaction reference</label><input id="pay-ref" className="modal-input" name="reference" maxLength={120} value={reference} onChange={e => setReference(e.target.value)} placeholder="Enter your GCash/MariBank reference number" required /></>}
-      {method !== 'cash' && <><label className="form-label">Receipt image (required)</label><input className="file-input" name="receipt" type="file" accept="image/jpeg,image/png,image/webp" onChange={handleFile} required /><small className="muted">JPG, PNG, or WebP · up to 5 MB</small></>}
-      <div className="modal-actions"><button type="button" className="outline-btn" onClick={onClose} disabled={busy}>Cancel</button><button type="submit" className="primary" disabled={busy || remaining <= 0 || methods.length === 0}>{busy ? 'Submitting…' : 'Submit for verification'}</button></div>
+      </div>}
+      {!payLater && methods.length === 0 && <ErrorBox text="No payment methods are configured for this event." />}
+      {payLater && <div className="cash-note pay-later-note"><Clock3 size={18} /><p>Your unpaid balance will be due 3 days after you choose Pay Later. We’ll email you the due date. You can submit an actual payment using Cash, GCash, or MariBank before then.</p></div>}
+      {!payLater && meta.qr && <div className="qr-payment"><div className="qr-frame"><img src={meta.qr} alt={`${meta.label} QR code`} /></div><p className="muted">Scan the QR code with your e-wallet, then upload a clear screenshot or photo of your receipt.</p></div>}
+      {!payLater && method === 'cash' && <div className="cash-note"><Banknote size={18} /><p>Pay in person to a JPCS officer. No receipt upload is needed.</p></div>}
+      {!payLater && <div className="form-row">
+        <div className="form-field"><label className="form-label" htmlFor="pay-amount">Amount to submit</label><input id="pay-amount" className="modal-input" name="amount" type="number" min="0.01" step="0.01" max={remaining} value={amount} onChange={e => { amountEdited.current = true; setAmount(e.target.value) }} required /></div>
+      </div>}
+      {!payLater && method !== 'cash' && <><label className="form-label" htmlFor="pay-ref">Transaction reference</label><input id="pay-ref" className="modal-input" name="reference" maxLength={120} value={reference} onChange={e => setReference(e.target.value)} placeholder="Enter your GCash/MariBank reference number" required /></>}
+      {!payLater && method !== 'cash' && <><label className="form-label">Receipt image (required)</label><input className="file-input" name="receipt" type="file" accept="image/jpeg,image/png,image/webp" onChange={handleFile} required /><small className="muted">JPG, PNG, or WebP · up to 5 MB</small></>}
+      <div className="modal-actions"><button type="button" className="outline-btn" onClick={onClose} disabled={busy}>Cancel</button><button type="submit" className="primary" disabled={busy || remaining <= 0 || (!payLater && (methods.length === 0 || !method))}>{busy ? 'Submitting…' : payLater ? 'Submit Pay Later' : 'Submit for verification'}</button></div>
     </form>
   </Modal>
 }
 
-function PaymentSuccessModal({ amount, eventName, onClose }) {
+function PaymentSuccessModal({ amount, eventName, payLater, dueAt, emailDelivery, onClose }) {
   return <Modal onClose={onClose}>
-    <div className="success-state"><CheckCircle2 size={48} /><h2>Submitted for verification</h2><p>Your {money(amount)} payment for <b>{eventName}</b> is pending officer review. You'll see it in My payments.</p><button type="button" className="primary" onClick={onClose}>Done</button></div>
+    <div className="success-state"><CheckCircle2 size={48} /><h2>{payLater ? 'Pay Later selected' : 'Submitted for verification'}</h2><p>{payLater ? <>Your payment for <b>{eventName}</b> is <b>not paid yet</b>. Please pay within 3 days, by <b>{dateTime(dueAt)}</b>. You’ll see this obligation in My payments.</> : <>Your {money(amount)} payment for <b>{eventName}</b> is pending officer review. You'll see it in My payments.</>}</p>{payLater && emailDelivery?.sentAt && <p className="muted">Pay Later email sent to your registered email address.</p>}{payLater && emailDelivery?.configured === false && <p className="muted">The Pay Later email is queued, but email delivery is not configured. Please contact an administrator.</p>}{payLater && emailDelivery?.configured && !emailDelivery.sentAt && emailDelivery.sent === 0 && <p className="muted">The email could not be sent yet{emailDelivery.failures?.[0]?.error ? `: ${emailDelivery.failures[0].error}` : '.'} It remains in the outbox for retry.</p>}<button type="button" className="primary" onClick={onClose}>Done</button></div>
   </Modal>
 }
 
-function PaymentDetailModal({ payment, admin, profile, onClose, onReview }) {
+function PaymentDetailModal({ payment, admin, profile, onClose, onReview, onDelete, requestConfirm }) {
   const reg = payment.registrations || payment.registration || {}
   const member = reg.profiles || payment.profiles || {}
   const ev = reg.events || payment.event || {}
@@ -463,6 +775,8 @@ function PaymentDetailModal({ payment, admin, profile, onClose, onReview }) {
   const [remarks, setRemarks] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const [reviewerName, setReviewerName] = useState('')
+  const [reviewerLoading, setReviewerLoading] = useState(false)
   useEffect(() => {
     let alive = true
     if (!payment.receipt_path) { setReceipt({ loading: false, url: '', error: '' }); return }
@@ -470,19 +784,36 @@ function PaymentDetailModal({ payment, admin, profile, onClose, onReview }) {
     api(`/api/receipts/${payment.id}`, {}, 'receipt').then(d => { if (alive) setReceipt({ loading: false, url: d.url, error: '' }) }).catch(ex => { if (alive) setReceipt({ loading: false, url: '', error: ex.message }) })
     return () => { alive = false }
   }, [payment.id, payment.receipt_path])
+  useEffect(() => {
+    let alive = true
+    if (!payment.reviewed_by) { setReviewerName(''); setReviewerLoading(false); return }
+    setReviewerLoading(true)
+    api('/api/payments/reviewer', { method: 'POST', body: JSON.stringify({ paymentId: payment.id }) }, 'request')
+      .then(result => { if (alive) setReviewerName(result.reviewerName || '') })
+      .catch(() => { if (alive) setReviewerName('') })
+      .finally(() => { if (alive) setReviewerLoading(false) })
+    return () => { alive = false }
+  }, [payment.id, payment.reviewed_by])
   const retry = () => { setReceipt({ loading: true, url: '', error: '' }); setImageFailed(false); api(`/api/receipts/${payment.id}`, {}, 'receipt').then(d => setReceipt({ loading: false, url: d.url, error: '' })).catch(ex => setReceipt({ loading: false, url: '', error: ex.message })) }
   const submit = async () => {
     if (decision === 'rejected' && remarks.trim().length < 3) { setErr('Add a short reason (at least 3 characters).'); return }
     setBusy(true); setErr('')
     try { await onReview(payment, decision, remarks.trim()); onClose() } catch (ex) { setErr(ex.message) } finally { setBusy(false) }
   }
+  const remove = () => requestConfirm({
+    title: 'Delete payment?',
+    message: `Delete this ${money(payment.amount)} ${payment.method} payment? This action will be recorded in the audit log.`,
+    confirmText: 'Delete payment',
+    destructive: true,
+    onConfirm: async () => { await onDelete(payment); onClose() }
+  })
   const pending = payment.state === 'pending'
   return <Modal onClose={onClose} className="review-modal">
     <div className="modal-heading"><div><p className="eyebrow">PAYMENT DETAILS</p><h2>{ev.name || 'Event'}</h2></div><ModalClose onClick={onClose} /></div>
     <div className="review-status-row"><span className={`status ${payment.state === 'approved' ? 'paid' : payment.state === 'rejected' ? 'rejected' : 'pending'}`}><i />{payment.state === 'approved' ? 'Approved' : payment.state === 'rejected' ? 'Rejected' : 'Pending verification'}</span></div>
     <div className="review-grid">
       <section className="review-card"><h3>Member</h3><div className="review-lines"><div><span>Name</span><b>{memberName}</b></div><div><span>Email</span><b>{memberEmail || '—'}</b></div>{member.student_number && <div><span>Student number</span><b>{member.student_number}</b></div>}{member.year_level && <div><span>Year level</span><b>{yearLabel(member.year_level)}</b></div>}</div></section>
-      <section className="review-card"><h3>Payment</h3><div className="review-lines"><div><span>Amount</span><b>{money(payment.amount)}</b></div><div><span>Method</span><b>{payment.method}</b></div><div><span>Reference</span><b>{payment.transaction_reference || 'Not provided'}</b></div><div><span>Submitted</span><b>{dateTime(payment.submitted_at)}</b></div></div></section>
+       <section className="review-card"><h3>Payment</h3><div className="review-lines"><div><span>Amount</span><b>{money(payment.amount)}</b></div><div><span>Method</span><b>{payment.method}</b></div><div><span>Reference</span><b>{payment.transaction_reference || 'Not provided'}</b></div><div><span>Submitted</span><b>{dateTime(payment.submitted_at)}</b></div>{payment.reviewed_by && <><div><span>Reviewed by</span><b>{reviewerLoading ? 'Loading…' : reviewerName || 'Officer'}</b></div>{payment.reviewed_at && <div><span>Reviewed at</span><b>{dateTime(payment.reviewed_at)}</b></div>}</>}</div></section>
     </div>
     <section className="review-card"><h3>Receipt</h3>
       {receipt.loading && <div className="receipt-state"><RefreshCw size={16} className="spin" />Loading receipt…</div>}
@@ -499,10 +830,11 @@ function PaymentDetailModal({ payment, admin, profile, onClose, onReview }) {
       {err && <ErrorBox text={err} />}
     </section>}
     {admin && !pending && <section className="review-actions-card"><p className="muted">This payment has already been reviewed.</p></section>}
+    {admin && profile?.role === 'admin' && <section className="review-actions-card payment-delete-actions"><p className="muted">Remove this payment submission from the records.</p><button type="button" className="reject-btn solid" onClick={remove} disabled={busy}><Trash2 size={15} />{busy ? 'Deleting…' : 'Delete payment'}</button>{err && <ErrorBox text={err} />}</section>}
   </Modal>
 }
 
-function EventModal({ event, onClose, onSaved, notify, setError }) {
+function EventModal({ event, onClose, onSaved, notify, setError, requestConfirm }) {
   const [name, setName] = useState(event?.name || '')
   const [description, setDescription] = useState(event?.description || '')
   const [price, setPrice] = useState(event?.price ?? '')
@@ -511,6 +843,7 @@ function EventModal({ event, onClose, onSaved, notify, setError }) {
   const [deadline, setDeadline] = useState(localDate(event?.payment_deadline))
   const [instructions, setInstructions] = useState(event?.payment_instructions || '')
   const [active, setActive] = useState(event?.active ?? true)
+  const [payLaterEnabled, setPayLaterEnabled] = useState(event?.pay_later_enabled ?? true)
   const [methods, setMethods] = useState(event?.methods || ['cash', 'gcash', 'maribank'])
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -520,7 +853,7 @@ function EventModal({ event, onClose, onSaved, notify, setError }) {
     if (methods.length === 0) { setErr('Select at least one payment method.'); return }
     setBusy(true); setErr(''); setError('')
     try {
-      const payload = { name, description, price: Number(price), event_date: eventDate || null, venue, payment_deadline: deadline || null, payment_instructions: instructions, active, methods }
+      const payload = { name, description, price: Number(price), event_date: eventDate || null, venue, payment_deadline: deadline || null, payment_instructions: instructions, active, methods, pay_later_enabled: payLaterEnabled }
       if (!payload.name) throw new Error('Enter an event name.')
       if (!Number.isFinite(payload.price) || payload.price < 0) throw new Error('Enter a valid price.')
       let query
@@ -532,6 +865,22 @@ function EventModal({ event, onClose, onSaved, notify, setError }) {
       notify('Event saved.')
       onClose()
     } catch (ex) { setErr(friendlyError(ex, 'event')) } finally { setBusy(false) }
+  }
+  const remove = () => {
+    if (!event?.id) return
+    requestConfirm({
+      title: 'Delete event?',
+      message: `Delete “${event.name}”? Events with registrations or payment history cannot be deleted.`,
+      confirmText: 'Delete event',
+      destructive: true,
+      onConfirm: async () => {
+        setBusy(true); setErr('')
+        try {
+          await api('/api/events/delete', { method: 'POST', body: JSON.stringify({ eventId: event.id }) }, 'event')
+          onSaved(); notify('Event deleted.'); onClose()
+        } catch (ex) { setErr(friendlyError(ex, 'event')); throw ex } finally { setBusy(false) }
+      }
+    })
   }
   return <Modal onClose={onClose} className="event-modal">
     <div className="modal-heading"><div><p className="eyebrow">EVENT MANAGEMENT</p><h2>{event?.id ? 'Edit event' : 'Create event'}</h2></div><ModalClose onClick={onClose} /></div>
@@ -555,8 +904,9 @@ function EventModal({ event, onClose, onSaved, notify, setError }) {
       <div className="checkbox-row">
         {['cash', 'gcash', 'maribank'].map(m => <label key={m} className="checkbox"><input type="checkbox" checked={methods.includes(m)} onChange={() => toggle(m)} />{METHOD_META[m].label}</label>)}
       </div>
+      <label className="checkbox pay-later-toggle"><input type="checkbox" checked={payLaterEnabled} onChange={e => setPayLaterEnabled(e.target.checked)} />Enable Pay Later for this event <small>Members have 3 days to pay; actual payments still require approval.</small></label>
       <label className="checkbox"><input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} />Event active</label>
-      <div className="modal-actions"><button type="button" className="outline-btn" onClick={onClose} disabled={busy}>Cancel</button><button type="submit" className="primary" disabled={busy}>{busy ? 'Saving…' : 'Save event'}</button></div>
+      <div className="modal-actions">{event?.id && <><button type="button" className="outline-btn event-delete-button" onClick={remove} disabled={busy}><Trash2 size={15} />Delete</button><span className="modal-actions-spacer" /></>}<button type="button" className="outline-btn" onClick={onClose} disabled={busy}>Cancel</button><button type="submit" className="primary" disabled={busy}>{busy ? 'Saving…' : 'Save event'}</button></div>
     </form>
   </Modal>
 }
@@ -574,12 +924,14 @@ export default function App() {
   const [registrations, setRegistrations] = useState([])
   const [payments, setPayments] = useState([])
   const [members, setMembers] = useState([])
+  const [membersPage, setMembersPage] = useState(1)
   const [passes, setPasses] = useState([])
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [toast, setToast] = useState('')
   const [modal, setModal] = useState(null)
+  const [confirmDialog, setConfirmDialog] = useState(null)
   const [mobile, setMobile] = useState(false)
   const [refresh, setRefresh] = useState(0)
   const [checkin, setCheckin] = useState(null)
@@ -591,10 +943,12 @@ export default function App() {
   const [filterYear, setFilterYear] = useState('all')
   const [viewMode, setViewMode] = useState(() => safeGet('jpcs-workspace') || 'admin')
   const [profileMenu, setProfileMenu] = useState(false)
+const [moreOpen, setMoreOpen] = useState(false)
   const [dataLoading, setDataLoading] = useState(false)
   const menuRef = useRef(null)
   const toastTimer = useRef(null)
   const notify = useCallback(msg => { setToast(msg); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 4000) }, [])
+  const requestConfirm = useCallback(options => setConfirmDialog(options), [])
   useEffect(() => () => clearTimeout(toastTimer.current), [])
   const hasAdminRole = profile?.role && profile.role !== 'member'
   const isAdmin = hasAdminRole && viewMode === 'admin'
@@ -631,7 +985,7 @@ export default function App() {
     try {
       const e = await supabase.from('events').select('*').order('event_date', { ascending: true, nullsFirst: false })
       if (e.error) throw e.error; setEvents(e.data || [])
-      const r = await supabase.from('registrations').select('id,member_id,event_id,price,created_at,events(*),payments(*),passes(*)').order('created_at', { ascending: false })
+      const r = await supabase.from('registrations').select('id,member_id,event_id,price,created_at,pay_later_started_at,pay_later_due_at,events(*),profiles(full_name,email),payments(*),passes(*)').order('created_at', { ascending: false })
       if (r.error) throw r.error; setRegistrations(r.data || [])
       if (profile.role !== 'member') {
         const [p, m] = await Promise.all([supabase.from('payments').select('*,registrations(id,member_id,event_id,profiles(full_name,email,student_number,year_level),events(name,price,event_date))').order('submitted_at', { ascending: false }), supabase.from('profiles').select('*').order('full_name')])
@@ -665,6 +1019,32 @@ export default function App() {
   const openPayment = event => { setError(''); navigate('Events'); setModal({ type: 'payment', event }) }
   const onPaymentSubmitted = info => { setModal({ type: 'paymentSubmitted', ...info }); setRefresh(v => v + 1) }
   const handleReview = async (payment, decision, remarks) => { await api(`/api/payments/${payment.id}/review`, { method: 'POST', body: JSON.stringify({ decision, remarks }) }, 'review'); setRefresh(v => v + 1); const sent = decision === 'approved'; if (decision === 'approved') notify('Payment approved. Confirmation email status is noted in your workspace.'); else notify('Payment rejected. The member can see the reason provided.') }
+  const handleDeletePayment = async payment => { await api('/api/payments/delete', { method: 'POST', body: JSON.stringify({ paymentId: payment.id }) }, 'request'); setRefresh(v => v + 1); notify('Payment deleted. The action was added to the audit log.') }
+  const handleDeletePayLater = async registration => {
+    requestConfirm({
+      title: 'Delete Pay Later obligation?',
+      message: `Delete the Pay Later obligation for ${registration.profiles?.full_name || 'this member'} — ${registration.events?.name || 'this event'}? Actual payment history will be kept.`,
+      confirmText: 'Delete obligation',
+      destructive: true,
+      onConfirm: async () => {
+        await api('/api/pay-later/delete', { method: 'POST', body: JSON.stringify({ registrationId: registration.id }) }, 'request')
+        setRefresh(v => v + 1); notify('Pay Later obligation deleted. The action was added to the audit log.')
+      }
+    })
+  }
+  const handleDeleteMember = async member => {
+    if (member.role === 'admin' || member.id === userId) return
+    requestConfirm({
+      title: 'Delete member?',
+      message: `Delete ${member.full_name}'s account? This cannot be undone.`,
+      confirmText: 'Delete member',
+      destructive: true,
+      onConfirm: async () => {
+        await api('/api/members/delete', { method: 'POST', body: JSON.stringify({ userId: member.id }) }, 'request')
+        setRefresh(value => value + 1); notify('Member deleted.')
+      }
+    })
+  }
   const openDetail = p => setModal({ type: 'paymentDetail', payment: p })
   const checkPass = async () => { try { setBusy(true); const token = location.pathname.split('/').pop(); const result = await api(`/api/passes/${encodeURIComponent(token)}/check-in`, { method: 'POST', body: JSON.stringify({}) }, 'checkin'); setCheckin(result) } catch (e) { setCheckin({ valid: false, error: e.message }) } finally { setBusy(false) } }
   const applyCheckin = data => { if (!data?.passId && !data?.token) return; setPasses(prev => prev.map(p => { const match = (data.passId && p.id === data.passId) || (data.token && p.token === data.token); return match ? { ...p, checked_in_at: data.checkedInAt || p.checked_in_at || new Date().toISOString() } : p })) }
@@ -673,23 +1053,28 @@ export default function App() {
   const myPayments = useMemo(() => hasAdminRole && viewMode === 'member' ? memberRegs.flatMap(r => (r.payments || []).map(p => ({ ...p, registration: r, event: r.events }))) : (isAdmin ? payments : memberRegs.flatMap(r => (r.payments || []).map(p => ({ ...p, registration: r, event: r.events })))), [hasAdminRole, viewMode, memberRegs, isAdmin, payments])
   const filteredEvents = useMemo(() => events.filter(e => e.name.toLowerCase().includes(query.toLowerCase()) || (e.venue || '').toLowerCase().includes(query.toLowerCase())), [events, query])
   const filteredPayments = useMemo(() => payments.filter(p => `${p.registrations?.events?.name || p.event?.name || ''} ${p.registrations?.profiles?.full_name || ''} ${p.registrations?.profiles?.email || ''} ${p.transaction_reference || ''}`.toLowerCase().includes(query.toLowerCase())), [payments, query])
+  const filteredMembers = useMemo(() => members.filter(m => `${m.full_name} ${m.email} ${m.student_number || ''}`.toLowerCase().includes(query.toLowerCase()) && (filterYear === 'all' || String(m.year_level) === filterYear)), [members, query, filterYear])
+  useEffect(() => { setMembersPage(1) }, [query, filterYear])
+  const membersPageCount = Math.max(1, Math.ceil(filteredMembers.length / 5))
+  const currentMembersPage = Math.min(membersPage, membersPageCount)
+  const pagedMembers = filteredMembers.slice((currentMembersPage - 1) * 5, currentMembersPage * 5)
   const reportItems = useMemo(() => payments.filter(p => (filterState === 'all' || p.state === filterState) && (filterMethod === 'all' || p.method === filterMethod) && (filterEvent === 'all' || p.registrations?.event_id === filterEvent) && (filterYear === 'all' || String(p.registrations?.profiles?.year_level) === filterYear) && (!query || `${p.registrations?.profiles?.full_name || ''} ${p.registrations?.profiles?.email || ''}`.toLowerCase().includes(query.toLowerCase())) && (!dateFrom || p.submitted_at >= dateFrom) && (!dateTo || p.submitted_at.slice(0, 10) <= dateTo)), [payments, filterState, filterMethod, filterEvent, filterYear, query, dateFrom, dateTo])
   const collected = payments.filter(p => p.state === 'approved').reduce((s, p) => s + Number(p.amount || 0), 0)
   const pendingList = payments.filter(p => p.state === 'pending')
   const memberPaid = memberRegs.flatMap(r => r.payments || []).filter(p => p.state === 'approved').reduce((s, p) => s + Number(p.amount || 0), 0)
   const memberPending = memberRegs.flatMap(r => r.payments || []).filter(p => p.state === 'pending').length
   const memberFullyPaid = memberRegs.filter(r => statusOf(r, r.events?.price) === 'Fully paid').length
-  const memberPasses = passes.filter(p => p.registration?.member_id === userId).length
+  const memberPasses = passes.filter(p => p.registration?.member_id === userId && !p.pay_later).length
   const adminFullyPaid = registrations.filter(r => statusOf(r, r.events?.price) === 'Fully paid').length
   const adminPartially = registrations.filter(r => statusOf(r, r.events?.price) === 'Partially paid').length
   const nav = isAdmin ? [['Overview', Home], ['Check-in', ScanLine], ['Members', Users], ['Payments', CreditCard], ['Events', Ticket], ['Reports', Activity]] : [['Overview', Home], ['My payments', Wallet], ['Events', Ticket], ['My passes', ShieldCheck]]
-  const mobileNav = isAdmin ? [['Overview', Home], ['Payments', CreditCard], ['Check-in', ScanLine], ['Members', Users], ['Events', Ticket]] : [['Overview', Home], ['My payments', Wallet], ['Events', Ticket], ['My passes', ShieldCheck]]
+  const mobileNav = isAdmin ? [['Overview', Home], ['Payments', CreditCard], ['Check-in', ScanLine], ['Events', Ticket], ['More', MoreHorizontal]] : [['Overview', Home], ['My payments', Wallet], ['Events', Ticket], ['My passes', ShieldCheck]]
   const pendingBadge = isAdmin ? pendingList.length : memberPending
 
   if (!supabase) return <AuthFrame dark={dark}><img className="login-logo" src="/images/jpcs-logo.png" alt="JPCS logo" /><p className="eyebrow">CONFIGURATION NEEDED</p><h1>Connect Supabase</h1><p className="muted">Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY, then restart the app.</p></AuthFrame>
   if (!authReady) return <div className={`loading-screen ${dark ? 'dark' : ''}`}><img src="/images/jpcs-logo.png" alt="JPCS" /><p>Preparing your workspace…</p></div>
   if (!session) {
-    return <AuthFrame dark={dark}><img className="login-logo" src="/images/jpcs-logo.png" alt="JPCS logo" /><p className="eyebrow">JPCS · PAYMENT PORTAL</p><h1>Welcome back.</h1><p className="muted">Sign in with your pre-created member or officer account.</p>{error && <ErrorBox text={error} onClose={() => setError('')} />}<form onSubmit={async e => { e.preventDefault(); setBusy(true); setError(''); const d = new FormData(e.currentTarget); const { error: err } = await supabase.auth.signInWithPassword({ email: d.get('email'), password: d.get('password') }); if (err) setError(friendlyError(err, 'auth')); setBusy(false) }}><label htmlFor="si-email">Email address</label><input id="si-email" name="email" type="email" autoComplete="username" required /><label htmlFor="si-pass">Password</label><input id="si-pass" name="password" type="password" autoComplete="current-password" required /><button disabled={busy} className="primary full">{busy ? 'Signing in…' : 'Sign in'} <ArrowRight size={17} /></button></form></AuthFrame>
+    return <AuthFrame dark={dark}><img className="login-logo" src="/images/jpcs-logo.png" alt="JPCS logo" /><p className="eyebrow">WELCOME BACK</p><h1>Pick up where you left off.</h1><p className="muted">Sign in to access your JPCS events and payment activity.</p>{error && <ErrorBox text={error} onClose={() => setError('')} />}<form onSubmit={async e => { e.preventDefault(); setBusy(true); setError(''); const d = new FormData(e.currentTarget); const { error: err } = await supabase.auth.signInWithPassword({ email: d.get('email'), password: d.get('password') }); if (err) setError(friendlyError(err, 'auth')); setBusy(false) }}><label htmlFor="si-email">Email address</label><input id="si-email" name="email" type="email" autoComplete="username" required /><label htmlFor="si-pass">Password</label><input id="si-pass" name="password" type="password" autoComplete="current-password" required /><button disabled={busy} className="primary full">{busy ? 'Signing in…' : 'Sign in'} <ArrowRight size={17} /></button></form><p className="login-card-footnote">Secure access for JPCS members and officers.</p></AuthFrame>
   }
   if (profileState === 'loading' || profileState === 'idle') return <div className={`loading-screen ${dark ? 'dark' : ''}`}><img src="/images/jpcs-logo.png" alt="JPCS" /><p>Loading your JPCS profile…</p></div>
   if (profileState === 'error' || profileState === 'missing') {
@@ -700,33 +1085,36 @@ export default function App() {
   }
 
   return <div className={`app-shell ${dark ? 'dark' : ''}`}><a className="skip-link" href="#main-content">Skip to main content</a>
-    <aside className="sidebar"><div className="brand"><img src="/images/jpcs-logo.png" alt="JPCS logo" /><div><b>JPCS Pay</b><small>{isAdmin ? 'ADMIN WORKSPACE' : 'MEMBER WORKSPACE'}</small></div></div><div className="nav-caption">WORKSPACE</div><nav>{nav.map(([name, Icon]) => <button key={name} type="button" className={`nav-link ${page === name ? 'selected' : ''}`} onClick={() => navigate(name)}><Icon size={18} /><span>{name}</span>{name === 'Payments' && pendingBadge > 0 && <i className="nav-badge">{pendingBadge}</i>}</button>)}</nav><div className="sidebar-bottom"><button type="button" className="nav-link" onClick={() => navigate('Settings')}><Settings size={18} /> Settings</button><div className="profile"><div className="avatar">{initials(profile.full_name)}</div><div className="profile-info"><b>{profile.full_name}</b><span>{roleLabel(profile)}</span></div><button type="button" className="icon-button" onClick={signOut} title="Log out" aria-label="Log out"><LogOut size={16} /></button></div></div></aside>
-    <main id="main-content" className="main-area"><header className="topbar"><div className="topbar-left"><div className="crumb"><b>{page}</b></div></div><div className="top-actions"><label className="search-box"><Search size={16} /><input placeholder="Search events, members, or payments" value={query} onChange={e => setQuery(e.target.value)} /></label><button type="button" className="icon-button" onClick={() => setDark(d => !d)} aria-label="Toggle theme">{dark ? <Sun /> : <Moon />}</button><button type="button" className="icon-button" onClick={() => setRefresh(v => v + 1)} title="Refresh" aria-label="Refresh"><RefreshCw size={16} className={dataLoading ? 'spin' : ''} /></button><span className="top-divider" /><div className="profile-menu-wrap" ref={menuRef}><button type="button" className="avatar small-avatar avatar-btn" onClick={() => setProfileMenu(s => !s)} aria-haspopup="menu" aria-expanded={profileMenu}>{initials(profile.full_name)}</button>{profileMenu && <div className="profile-menu" role="menu"><button type="button" role="menuitem" onClick={() => { setModal({ type: 'profileEdit' }); setProfileMenu(false) }}><Pencil size={16} /> Edit profile</button><button type="button" role="menuitem" onClick={() => navigate('Settings')}><Settings size={16} /> Settings</button><button type="button" role="menuitem" className="danger" onClick={signOut}><LogOut size={16} /> Log out</button></div>}</div></div></header>
+    <aside className="sidebar"><div className="brand"><img src="/images/jpcs-logo.png" alt="JPCS logo" /><div><b>JPCS Pay</b><small>{isAdmin ? 'ADMIN WORKSPACE' : 'MEMBER WORKSPACE'}</small></div></div><div className="nav-caption">WORKSPACE</div><nav>{nav.map(([name, Icon]) => <button key={name} type="button" className={`nav-link ${page === name ? 'selected' : ''}`} onClick={() => navigate(name)}><Icon size={18} /><span>{name === 'Overview' ? 'Dashboard' : name}</span>{name === 'Payments' && pendingBadge > 0 && <i className="nav-badge">{pendingBadge}</i>}</button>)}</nav><div className="sidebar-bottom"><button type="button" className="nav-link" onClick={() => navigate('Settings')}><Settings size={18} /> Settings</button><div className="profile"><div className="avatar">{initials(profile.full_name)}</div><div className="profile-info"><b>{profile.full_name}</b><span>{roleLabel(profile)}</span></div><button type="button" className="icon-button" onClick={signOut} title="Log out" aria-label="Log out"><LogOut size={16} /></button></div></div></aside>
+    <main id="main-content" className="main-area"><header className="topbar"><div className="topbar-left"><div className="crumb"><b>{page === 'Overview' ? 'Dashboard' : page}</b></div></div><div className="top-actions"><label className="search-box"><Search size={16} /><input placeholder="Search events, members, or payments" value={query} onChange={e => setQuery(e.target.value)} /></label><button type="button" className="icon-button" onClick={() => setDark(d => !d)} aria-label="Toggle theme">{dark ? <Sun /> : <Moon />}</button><button type="button" className="icon-button" onClick={() => setRefresh(v => v + 1)} title="Refresh" aria-label="Refresh"><RefreshCw size={16} className={dataLoading ? 'spin' : ''} /></button><span className="top-divider" /><div className="profile-menu-wrap" ref={menuRef}><button type="button" className="avatar small-avatar avatar-btn" onClick={() => setProfileMenu(s => !s)} aria-haspopup="menu" aria-expanded={profileMenu}>{initials(profile.full_name)}</button>{profileMenu && <div className="profile-menu" role="menu"><button type="button" role="menuitem" onClick={() => { setModal({ type: 'profileEdit' }); setProfileMenu(false) }}><Pencil size={16} /> Edit profile</button><button type="button" role="menuitem" onClick={() => navigate('Settings')}><Settings size={16} /> Settings</button><button type="button" role="menuitem" className="danger" onClick={signOut}><LogOut size={16} /> Log out</button></div>}</div></div></header>
       <div className="content">
-        {page === 'Overview' && <><div className="welcome-row"><div><p className="eyebrow">{new Date().toLocaleDateString('en-PH', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }).toUpperCase()}</p><h1>{greeting(profile.full_name)} <span>✦</span></h1><p className="muted">{isAdmin ? 'Payment activity across JPCS events.' : 'Your events and payment activity at a glance.'}</p></div>{isAdmin && <button type="button" className="outline-btn" onClick={() => setModal({ type: 'event' })}><Plus size={16} /> Create event</button>}</div>
-          <section className="stats-grid">{isAdmin ? <><Stat icon={<Wallet />} label="Total collected" value={money(collected)} color="navy" /><Stat icon={<Clock3 />} label="Pending approval" value={pendingList.length} color="amber" /><Stat icon={<Ticket />} label="Fully paid events" value={adminFullyPaid} color="green" /><Stat icon={<Users />} label="Registered members" value={members.length} color="navy" /><Stat icon={<CreditCard />} label="Partially paid" value={adminPartially} color="amber" /></> : <><Stat icon={<Wallet />} label="Total paid" value={money(memberPaid)} color="navy" /><Stat icon={<Clock3 />} label="Pending approval" value={memberPending} color="amber" /><Stat icon={<Ticket />} label="Fully paid events" value={memberFullyPaid} color="green" /><Stat icon={<ShieldCheck />} label="Entrance passes" value={memberPasses} color="navy" /></>}</section>
+        {page === 'Overview' && <><div className="welcome-row dashboard-banner"><div><p className="eyebrow">{new Date().toLocaleDateString('en-PH', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }).toUpperCase()}</p><h1>{greeting(profile.full_name)}</h1><p className="muted">{isAdmin ? 'Payment activity across JPCS events.' : 'Your events and payment activity at a glance.'}</p></div>{isAdmin && <button type="button" className="outline-btn" onClick={() => setModal({ type: 'event' })}><Plus size={16} /> Create event</button>}</div>
+          <section className={`stats-grid ${isAdmin ? 'admin-dashboard-stats' : 'member-dashboard-stats'}`}>{isAdmin ? <><Stat icon={<Wallet />} label="Total collected" value={money(collected)} color="navy" /><Stat icon={<Clock3 />} label="Pending approval" value={pendingList.length} color="amber" /><Stat icon={<Ticket />} label="Fully paid events" value={adminFullyPaid} color="green" /><Stat icon={<Users />} label="Registered members" value={members.length} color="navy" /><Stat icon={<CreditCard />} label="Partially paid" value={adminPartially} color="amber" /></> : <><Stat icon={<Wallet />} label="Total paid" value={money(memberPaid)} color="navy" /><Stat icon={<Clock3 />} label="Pending approval" value={memberPending} color="amber" /><Stat icon={<Ticket />} label="Fully paid events" value={memberFullyPaid} color="green" /><Stat icon={<ShieldCheck />} label="Entrance passes" value={memberPasses} color="navy" /></>}</section>
           <section className="middle-grid"><div className="panel events-panel"><PanelTitle eyebrow="AVAILABLE TO YOU" title="Upcoming events" action={isAdmin ? null : <button type="button" className="text-button" onClick={() => navigate('Events')}>All events <ArrowRight size={15} /></button>} /><div className="event-grid">{filteredEvents.filter(e => e.active || isAdmin).slice(0, isAdmin ? 6 : 4).map(e => <EventCard key={e.id} event={e} registration={registrations.find(r => r.event_id === e.id && r.member_id === userId)} onPay={() => openPayment(e)} isAdmin={isAdmin} onEdit={() => setModal({ type: 'event', event: e })} />)}</div>{!filteredEvents.filter(e => e.active || isAdmin).length && <Empty text={dataLoading ? 'Loading events…' : 'No active events found.'} />}</div><div className="panel progress-panel"><PanelTitle eyebrow={isAdmin ? 'REVIEW QUEUE' : 'YOUR ACTIVITY'} title={isAdmin ? 'Needs review' : 'Payment overview'} />{isAdmin ? <><div className="admin-review-count">{pendingList.length}<span>payments waiting for review</span></div><button type="button" className="view-payments" onClick={() => navigate('Payments')}>Open verification queue <ArrowRight size={15} /></button></> : <><div className="progress-summary"><div className="progress-ring" style={{ '--paid': `${paidPercent(memberRegs, events.filter(e => e.active))}%` }}><div><b>{paidPercent(memberRegs, events.filter(e => e.active))}%</b><span>PAID</span></div></div><div><p className="muted">Across active events</p><h3>{money(memberPaid)}</h3></div></div><button type="button" className="view-payments" onClick={() => navigate('My payments')}>View payment history <ArrowRight size={15} /></button></>}</div></section>
           <section className="panel history-panel live-table"><PanelTitle eyebrow={isAdmin ? 'LATEST SUBMISSIONS' : 'YOUR RECENT ACTIVITY'} title={isAdmin ? 'Recent payment submissions' : 'Payment history'} action={<button type="button" className="text-button" onClick={() => navigate(isAdmin ? 'Payments' : 'My payments')}>View all <ArrowRight size={15} /></button>} /><PaymentTable items={(isAdmin ? payments : myPayments).slice(0, 6)} admin={isAdmin} onOpen={openDetail} /></section>
         </>}
         {page === 'Events' && <section className="panel live-panel"><PanelTitle eyebrow="JPCS ACTIVITIES" title="Events" action={isAdmin && <button type="button" className="primary small-primary" onClick={() => setModal({ type: 'event' })}><Plus size={15} /> Add event</button>} /><div className="event-grid expanded">{filteredEvents.filter(e => e.active || isAdmin).map(e => <EventCard key={e.id} event={e} registration={registrations.find(r => r.event_id === e.id && r.member_id === userId)} onPay={() => openPayment(e)} isAdmin={isAdmin} onEdit={() => setModal({ type: 'event', event: e })} />)}</div>{!filteredEvents.filter(e => e.active || isAdmin).length && <Empty text="No events found." />}</section>}
         {page === 'Check-in' && hasAdminRole && <section className="panel live-panel"><PanelTitle eyebrow="LIVE ENTRY DESK" title="Check-in scanner" /><Suspense fallback={<div className="inline-loading">Loading scanner…</div>}><CheckInScanner events={events} passes={passes} api={api} onCheckedIn={applyCheckin} /></Suspense></section>}
-        {(page === 'My payments' || page === 'Payments') && <section className="panel live-panel"><PanelTitle eyebrow={isAdmin ? 'MANUAL VERIFICATION' : 'PAYMENT RECORDS'} title={isAdmin ? 'Payment submissions' : 'My payments'} /><PaymentTable items={isAdmin ? filteredPayments : myPayments} admin={isAdmin} onOpen={openDetail} /></section>}
-        {page === 'My passes' && <section className="panel live-panel"><PanelTitle eyebrow="FULLY PAID EVENTS" title="My entrance passes" /><div className="pass-grid">{passes.filter(p => p.registration?.member_id === userId).map(p => <PassCard key={p.id} pass={p} />)}{passes.filter(p => p.registration?.member_id === userId).length === 0 && <Empty text="Entrance passes appear after all payments for an event are approved." />}</div></section>}
-        {page === 'Members' && isAdmin && <section className="panel live-panel"><PanelTitle eyebrow="MEMBER DIRECTORY" title="Members" action={<button type="button" className="primary small-primary" onClick={() => setModal({ type: 'addMember' })}><Plus size={15} /> Add member</button>} /><div className="report-filters member-filters"><select value={filterYear} onChange={e => setFilterYear(e.target.value)}><option value="all">All year levels</option><option value="1">1st Year</option><option value="2">2nd Year</option><option value="3">3rd Year</option><option value="4">4th Year</option></select><span className="muted">Search by name, email, or student number.</span></div><div className="table-wrap"><table><thead><tr><th>Member</th><th>Student no.</th><th>Year level</th><th>Role</th><th>Email</th><th>Action</th></tr></thead><tbody>{members.filter(m => `${m.full_name} ${m.email} ${m.student_number || ''}`.toLowerCase().includes(query.toLowerCase()) && (filterYear === 'all' || String(m.year_level) === filterYear)).map(m => <tr key={m.id}><td data-label="Member"><b>{m.full_name}</b><small className="method">{m.email}</small></td><td data-label="Student no.">{m.student_number || '—'}</td><td data-label="Year level">{m.year_level ? `${m.year_level}${m.year_level === 1 ? 'st' : m.year_level === 2 ? 'nd' : m.year_level === 3 ? 'rd' : 'th'} Year` : yearLabel(m.year_level)}</td><td data-label="Role">{roleLabel(m)}</td><td data-label="Email">{m.email}</td><td data-label="Action">{m.role !== 'admin' && <button type="button" className="outline-btn small" onClick={async () => { if (!window.confirm(`Make ${m.full_name} an administrator?`)) return; try { await api('/api/members/role', { method: 'POST', body: JSON.stringify({ userId: m.id, role: 'admin' }) }, 'request'); setRefresh(v => v + 1); notify('Member promoted to admin.') } catch (ex) { notify(ex.message || 'Could not update role.') } }}>Make admin</button>}</td></tr>)}</tbody></table>{members.length === 0 && <Empty text="No member profiles found." />}</div></section>}
+        {(page === 'My payments' || page === 'Payments') && <section className="panel live-panel"><PanelTitle eyebrow={isAdmin ? 'MANUAL VERIFICATION' : 'PAYMENT RECORDS'} title={isAdmin ? 'Payment submissions' : 'My payments'} />{isAdmin ? <PayLaterTable registrations={registrations.filter(reg => !query || `${reg.events?.name || ''} ${reg.profiles?.full_name || ''} ${reg.profiles?.email || ''}`.toLowerCase().includes(query.toLowerCase()))} onDelete={handleDeletePayLater} canDelete={profile.role === 'admin'} /> : <MyPayLaterTable registrations={memberRegs} />}<PaymentTable items={isAdmin ? filteredPayments : myPayments} admin={isAdmin} onOpen={openDetail} /></section>}
+        {page === 'My passes' && <section className="panel live-panel"><PanelTitle eyebrow="FULLY PAID EVENTS" title="My entrance passes" /><div className="pass-grid">{passes.filter(p => p.registration?.member_id === userId && !p.pay_later).map(p => <PassCard key={p.id} pass={p} />)}{passes.filter(p => p.registration?.member_id === userId && !p.pay_later).length === 0 && <Empty text="Entrance passes appear after all payments for an event are approved." />}</div></section>}
+        {page === 'Members' && isAdmin && <section className="panel live-panel"><PanelTitle eyebrow="MEMBER DIRECTORY" title={<span className="members-title">Members <span className="member-count-badge" aria-label={`${filteredMembers.length} members`}>{filteredMembers.length.toLocaleString()}</span></span>} action={<div className="member-action-buttons">{profile.role === 'admin' && <button type="button" className="outline-btn small-primary" onClick={() => setModal({ type: 'memberImport' })}><Upload size={15} /> Import Members</button>}<button type="button" className="primary small-primary" onClick={() => setModal({ type: 'addMember' })}><Plus size={15} /> Add member</button></div>} /><div className="report-filters member-filters"><select value={filterYear} onChange={e => setFilterYear(e.target.value)}><option value="all">All year levels</option><option value="1">1st Year</option><option value="2">2nd Year</option><option value="3">3rd Year</option><option value="4">4th Year</option></select><span className="muted">Search by name, email, or student number.</span></div><div className="table-wrap"><table><thead><tr><th>Member</th><th>Year level</th><th>Role</th><th>Email</th><th>Action</th></tr></thead><tbody>{pagedMembers.map(m => <tr key={m.id}><td data-label="Member"><b>{m.full_name}</b><small className="method">{m.email}</small></td><td data-label="Year level">{m.year_level ? `${m.year_level}${m.year_level === 1 ? 'st' : m.year_level === 2 ? 'nd' : m.year_level === 3 ? 'rd' : 'th'} Year` : yearLabel(m.year_level)}</td><td data-label="Role">{m.role === 'admin' ? 'Member/Admin' : 'Member'}</td><td data-label="Email">{m.email}</td><td data-label="Action"><div className="member-row-actions"><button type="button" className="outline-btn small" onClick={() => setModal({ type: 'memberEdit', member: m })}>Edit</button><button type="button" className="outline-btn small member-delete-btn" disabled={m.role === 'admin' || m.id === userId} title={m.role === 'admin' || m.id === userId ? 'Administrators and your own account cannot be deleted here.' : 'Delete member'} onClick={() => handleDeleteMember(m)}>Delete</button></div></td></tr>)}</tbody></table>{!filteredMembers.length && <Empty text="No member profiles found." />}<PaginationControls total={filteredMembers.length} page={currentMembersPage} onPageChange={setMembersPage} /></div></section>}
         {page === 'Reports' && isAdmin && <section className="panel live-panel"><PanelTitle eyebrow="ORGANIZATION FINANCES" title="Payment report" action={<button type="button" className="outline-btn" onClick={() => downloadReport(reportItems)}><Download size={15} /> Export CSV</button>} /><div className="stats-grid report-stats"><Stat icon={<Wallet />} label="Collected" value={money(collected)} color="navy" /><Stat icon={<Clock3 />} label="Pending" value={pendingList.length} color="amber" /><Stat icon={<Users />} label="Members" value={members.length} color="green" /></div><div className="report-filters"><select value={filterEvent} onChange={e => setFilterEvent(e.target.value)}><option value="all">All events</option>{events.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}</select><select value={filterYear} onChange={e => setFilterYear(e.target.value)}><option value="all">All year levels</option><option value="1">First Year</option><option value="2">Second Year</option><option value="3">Third Year</option><option value="4">Fourth Year</option></select><select value={filterMethod} onChange={e => setFilterMethod(e.target.value)}><option value="all">All methods</option><option value="cash">Cash</option><option value="gcash">GCash</option><option value="maribank">MariBank</option></select><select value={filterState} onChange={e => setFilterState(e.target.value)}><option value="all">All statuses</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select><label>From <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} /></label><label>To <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} /></label><button type="button" className="text-button" onClick={() => { setFilterState('all'); setFilterMethod('all'); setFilterEvent('all'); setFilterYear('all'); setDateFrom(''); setDateTo('') }}>Clear filters</button></div><PaymentTable items={reportItems} admin={isAdmin} onOpen={openDetail} /></section>}
         {page === 'Settings' && <section className="panel live-panel"><PanelTitle eyebrow="ACCOUNT PREFERENCES" title="Settings" /><div className="settings-card"><div><b>Account</b><span>{profile.full_name} · {profile.email}</span><small>Assigned role: {roleLabel(profile)}</small></div><ShieldCheck size={22} /></div><div className="settings-card"><div><b>Profile</b><span>Edit your display name, student number, or year level.</span></div><button type="button" className="outline-btn" onClick={() => setModal({ type: 'profileEdit' })}>Edit profile</button></div>{hasAdminRole && <div className="settings-card workspace-card"><div><b>Workspace</b><span>Switch between admin and member preview for this account.</span></div><button type="button" className="outline-btn" onClick={() => { const next = isAdmin ? 'member' : 'admin'; setViewMode(next); safeSet('jpcs-workspace', next); setPage('Overview'); notify(isAdmin ? 'Member workspace preview opened.' : 'Admin workspace opened.') }}>{isAdmin ? 'Switch to member view' : 'Switch to admin view'}</button></div>}<button type="button" className="logout-link settings-logout" onClick={signOut}>Sign out</button></section>}
-        {page === 'Verify pass' && <section className="panel live-panel checkin-panel"><PanelTitle eyebrow="JPCS EVENT CHECK-IN" title="Entrance pass verification" />{!hasAdminRole ? <ErrorBox text="Only authorized event officers can validate entrance passes." /> : <><p className="muted">Pass token: <b>{location.pathname.split('/').pop()}</b></p><button type="button" className="primary" disabled={busy || checkin?.valid} onClick={checkPass}>{busy ? 'Checking…' : 'Verify and check in'}</button>{checkin && <div className={`checkin-result ${checkin.valid ? 'valid' : 'invalid'}`}>{checkin.valid ? `Valid pass · ${checkin.member} · ${checkin.event}` : checkin.checkedIn ? `Already checked in at ${dateTime(checkin.checkedInAt)}` : checkin.error || 'Pass is invalid.'}</div>}</>}</section>}
+        {page === 'Verify pass' && <section className="panel live-panel checkin-panel"><PanelTitle eyebrow="JPCS EVENT CHECK-IN" title="Entrance pass verification" />{!hasAdminRole ? <ErrorBox text="Only authorized event officers can validate entrance passes." /> : <><p className="muted">Pass token: <b>{location.pathname.split('/').pop()}</b></p><button type="button" className="primary" disabled={busy || checkin?.valid || checkin?.payLater} onClick={checkPass}>{busy ? 'Checking…' : 'Verify and check in'}</button>{checkin && <div className={`checkin-result ${checkin.valid ? 'valid' : 'invalid'}`}>{checkin.valid ? `Valid pass · ${checkin.member} · ${checkin.event}` : checkin.payLater ? `Pay Later · ${checkin.member} · ${checkin.event} · Not paid yet; due ${dateTime(checkin.dueAt)}. This is not an entrance pass yet.` : checkin.checkedIn ? `Already checked in at ${dateTime(checkin.checkedInAt)}` : checkin.error || 'Pass is invalid.'}</div>}</>}</section>}
         {error && <ErrorBox text={error} onClose={() => setError('')} />}
         <footer><span>© {new Date().getFullYear()} JPCS · Payment Portal</span><span>Payments are manually verified by JPCS officers.</span></footer>
       </div>
     </main>
-    <nav className="bottom-nav">{mobileNav.map(([name, Icon]) => <button key={name} type="button" className={`bottom-nav-btn ${page === name ? 'active' : ''}`} onClick={() => navigate(name)}><Icon size={20} /><span>{name === 'My payments' ? 'My Payments' : name === 'My passes' ? 'My Passes' : name === 'Payments' ? 'Payments' : name}</span>{name === 'Payments' && pendingBadge > 0 && <i className="bottom-badge">{pendingBadge}</i>}</button>)}</nav>
+    <nav className={`bottom-nav ${isAdmin ? 'admin-bottom-nav' : 'member-bottom-nav'}`}>{mobileNav.map(([name, Icon]) => <button key={name} type="button" className={`bottom-nav-btn ${page === name ? 'active' : ''}`} onClick={() => { if (name === 'More') { setMoreOpen(o => !o); return } navigate(name); setMoreOpen(false) }}><Icon size={20} /><span>{name === 'Overview' ? 'Dashboard' : name === 'My payments' ? 'My Payments' : name === 'My passes' ? 'My Passes' : name === 'Payments' ? 'Payments' : name}</span>{name === 'Payments' && pendingBadge > 0 && <i className="bottom-badge">{pendingBadge}</i>}</button>)}{moreOpen && isAdmin && <div className="more-menu"><button type="button" onClick={() => { navigate('Members'); setMoreOpen(false) }}><Users size={16} /> Members</button><button type="button" onClick={() => { navigate('Reports'); setMoreOpen(false) }}><Activity size={16} /> Reports</button><button type="button" onClick={() => { navigate('Settings'); setMoreOpen(false) }}><Settings size={16} /> Settings</button></div>}</nav>
     {modal?.type === 'payment' && <PaymentModal event={modal.event} registration={registrations.find(r => r.event_id === modal.event.id && r.member_id === userId)} onClose={() => setModal(null)} onSubmitted={onPaymentSubmitted} setError={setError} />}
-    {modal?.type === 'paymentSubmitted' && <PaymentSuccessModal amount={modal.amount} eventName={modal.eventName} onClose={() => setModal(null)} />}
-    {modal?.type === 'paymentDetail' && <PaymentDetailModal payment={modal.payment} admin={isAdmin} profile={profile} onClose={() => setModal(null)} onReview={handleReview} />}
-    {modal?.type === 'event' && <EventModal event={modal.event} onClose={() => setModal(null)} onSaved={() => setRefresh(v => v + 1)} notify={notify} setError={setError} />}
+        {modal?.type === 'paymentSubmitted' && <PaymentSuccessModal amount={modal.amount} eventName={modal.eventName} payLater={modal.payLater} dueAt={modal.dueAt} emailDelivery={modal.emailDelivery} onClose={() => setModal(null)} />}
+    {modal?.type === 'paymentDetail' && <PaymentDetailModal payment={modal.payment} admin={isAdmin} profile={profile} onClose={() => setModal(null)} onReview={handleReview} onDelete={handleDeletePayment} requestConfirm={requestConfirm} />}
+    {modal?.type === 'event' && <EventModal event={modal.event} onClose={() => setModal(null)} onSaved={() => setRefresh(v => v + 1)} notify={notify} setError={setError} requestConfirm={requestConfirm} />}
     {modal?.type === 'profileEdit' && <ProfileModal profile={profile} onClose={() => setModal(null)} onSaved={setProfile} notify={notify} setError={setError} />}
     {modal?.type === 'addMember' && <AddMemberModal onClose={() => setModal(null)} onCreated={() => setRefresh(v => v + 1)} notify={notify} />}
+    {modal?.type === 'memberEdit' && <MemberEditModal member={modal.member} onClose={() => setModal(null)} onSaved={() => setRefresh(v => v + 1)} />}
+    {modal?.type === 'memberImport' && profile.role === 'admin' && <MemberImportModal onClose={() => setModal(null)} onImported={() => setRefresh(v => v + 1)} members={members} />}
+    {confirmDialog && <ConfirmModal {...confirmDialog} onClose={() => setConfirmDialog(null)} />}
     {toast && <div className="toast"><Check size={17} />{toast}</div>}
   </div>
 }
