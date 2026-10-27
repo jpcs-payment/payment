@@ -48,6 +48,7 @@ const localDate = v => {
   const d = new Date(v)
   return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16)
 }
+const localDateTimeToIso = value => value ? new Date(value).toISOString() : null
 const safeGet = (k, fallback) => {
   try { return localStorage.getItem(k) ?? fallback } catch { return fallback }
 }
@@ -915,7 +916,7 @@ function EventModal({ event, onClose, onSaved, notify, setError, requestConfirm 
     if (methods.length === 0) { setErr('Select at least one payment method.'); return }
     setBusy(true); setErr(''); setError('')
     try {
-      const payload = { name, description, price: Number(price), event_date: eventDate || null, venue, payment_deadline: deadline || null, payment_instructions: instructions, active, methods, pay_later_enabled: payLaterEnabled }
+      const payload = { name, description, price: Number(price), event_date: localDateTimeToIso(eventDate), venue, payment_deadline: localDateTimeToIso(deadline), payment_instructions: instructions, active, methods, pay_later_enabled: payLaterEnabled }
       if (!payload.name) throw new Error('Enter an event name.')
       if (!Number.isFinite(payload.price) || payload.price < 0) throw new Error('Enter a valid price.')
       let query
