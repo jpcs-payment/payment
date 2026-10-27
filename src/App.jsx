@@ -289,6 +289,7 @@ function WorkspaceSkeleton({ dark }) {
 }
 
 function EventCard({ event, registration, onPay, isAdmin, onEdit }) {
+  const [showInfo, setShowInfo] = useState(false)
   const status = statusOf(registration, event.price)
   const paid = (registration?.payments || []).filter(p => p.state === 'approved').reduce((s, p) => s + Number(p.amount || 0), 0)
   const price = Number(registration?.price ?? event.price ?? 0)
@@ -299,17 +300,24 @@ function EventCard({ event, registration, onPay, isAdmin, onEdit }) {
   const payLaterActive = !!registration?.pay_later_started_at && !fullyPaid
   const paymentProgress = price > 0 ? Math.min(100, Math.round(paid / price * 100)) : 100
   const statusText = payLaterActive ? `Pay Later · due ${date(registration.pay_later_due_at)}` : status === 'Fully paid' ? 'Fully paid' : status === 'Partially paid' ? `Partially paid · ${money(paid)} paid` : status === 'Pending verification' ? 'Pending verification' : status === 'Rejected' ? 'Rejected' : 'Unpaid'
-  return <article className="event-card">
-    <div className="event-art"><Ticket size={34} strokeWidth={1.7} /><small>{event.venue || 'JPCS event'}</small></div>
+  const eventDate = event.event_date ? new Date(event.event_date) : null
+  const dateParts = eventDate && !Number.isNaN(eventDate.getTime()) ? {
+    day: eventDate.toLocaleDateString('en-PH', { month: 'short', day: 'numeric' }).toUpperCase(),
+    yearTime: `${eventDate.getFullYear()} · ${eventDate.toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' })}`
+  } : null
+  const isMerch = /\b(jacket|merch(?:andise)?|shirt|hoodie|apparel|uniform)\b/i.test(`${event.name || ''} ${event.description || ''}`)
+  return <article className={`event-card ${isAdmin ? 'admin-event-card' : 'member-event-card'}`}>
+    <div className="event-art"><Ticket size={28} strokeWidth={1.7} /><span className="event-date-label">EVENT DATE</span><b>{dateParts?.day || 'TBA'}</b><span className="event-date-time">{dateParts?.yearTime || 'Date to be announced'}</span><small>{event.venue || 'JPCS · EVENTS'}</small></div>
     <div className="event-detail">
-      <div className="event-date"><Clock3 size={14} />{date(event.event_date)}</div>
+      <div className="event-card-topline"><span className="event-type-badge">{isMerch ? 'JPCS Merch' : 'JPCS Event'}</span>{event.payment_deadline && <span className="event-deadline"><Clock3 size={14} />Due {new Date(event.payment_deadline).toLocaleDateString('en-PH', { month: 'short', day: 'numeric' })}</span>}</div>
       <h3>{event.name}</h3>
       <p className="muted event-description">{event.description || 'Join us at this JPCS event.'}</p>
       {!isAdmin && <div className="event-payment-progress"><div><span>Payment progress</span><b>{paymentProgress}%</b></div><progress max="100" value={paymentProgress} aria-label={`Payment progress for ${event.name}`} /></div>}
       <div className="event-bottom">
-        <div className="event-price-box"><b>{money(price)}</b>{!isAdmin && <small className="method">{statusText}</small>}</div>
-        {isAdmin ? <button type="button" className="pay-button secondary" onClick={onEdit}><Pencil size={14} /> Edit</button> : <button type="button" className="pay-button" disabled={fullyPaid || status === 'Pending verification'} onClick={onPay}>{fullyPaid ? 'Paid' : status === 'Pending verification' ? 'Pending' : payLaterActive ? 'Pay now' : 'Pay'} <ArrowRight size={13} /></button>}
+        <div className="event-price-box">{!isAdmin && <small className="event-due-label"><Clock3 size={14} />Due {event.payment_deadline ? date(event.payment_deadline) : 'anytime'}</small>}<b>{money(isAdmin ? price : remaining)}</b>{!isAdmin && <small className="method">{statusText}</small>}</div>
+        <div className="event-card-actions">{isAdmin ? <button type="button" className="pay-button secondary" onClick={onEdit}><Pencil size={14} /> Edit</button> : <button type="button" className="pay-button" disabled={fullyPaid || status === 'Pending verification'} onClick={onPay}>{fullyPaid ? 'Paid' : status === 'Pending verification' ? 'Pending' : `Pay ${money(remaining)} Now`} <ArrowRight size={15} /></button>}{!isAdmin && <button type="button" className="event-info-button" aria-label={`${showInfo ? 'Hide' : 'View'} details for ${event.name}`} aria-expanded={showInfo} onClick={() => setShowInfo(value => !value)}><CircleHelp size={17} /></button>}</div>
       </div>
+      {showInfo && <div className="event-info-details"><b>Event details</b>{event.venue && <p><strong>Venue:</strong> {event.venue}</p>}{event.payment_instructions && <p>{event.payment_instructions}</p>}{!event.venue && !event.payment_instructions && <p>More information will be shared by JPCS.</p>}</div>}
     </div>
   </article>
 }
@@ -667,13 +675,13 @@ function MemberImportModal({ onClose, onImported, members }) {
   return <><Modal onClose={close} onEscape={handleEscape} contentHidden={expanded} className="member-import-modal" labelledBy="member-import-title">
     <div className="modal-heading"><div><p className="eyebrow">ADMIN · MEMBER DIRECTORY</p><h2 id="member-import-title">Import Members</h2></div><div className="member-import-heading-actions"><button ref={expandPreviewRef} type="button" className="member-import-expand" aria-label="Expand member preview table" disabled={!reviewed.length || Boolean(summary)} onClick={() => setExpanded(true)}><Maximize2 size={16} />Expand Table</button><ModalClose onClick={close} /></div></div>
     <div className="member-import-body" tabIndex={0} aria-label="Member import content">
-    <p className="muted">Upload a searchable PDF directory. Extracted records are reviewed here before any member accounts or directory data are saved.</p>
+    <p className="muted">Upload a student directory PDF. Searchable text is extracted directly, and scanned pages are read with OCR. Review and correct detected records before saving any member accounts or directory data.</p>
     {!summary && <>
       <label className={`member-import-dropzone ${processing ? 'processing' : ''} ${file ? 'has-file' : ''}`} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); chooseFile(event.dataTransfer.files?.[0]) }}>
         <input type="file" accept="application/pdf,.pdf" disabled={busy} onChange={event => { chooseFile(event.target.files?.[0]); event.target.value = '' }} />
         <Upload size={25} /><b>{file ? file.name : 'Drop the student directory PDF here'}</b><span>{file ? `${(file.size / 1024 / 1024).toFixed(1)} MB` : 'or click to browse · PDF only · up to 100 MB'}</span>
       </label>
-      {processing && <div className="member-import-progress"><span>{progress?.phase === 'extracting' ? `Reading page ${progress.page} of ${progress.pages}…` : 'Opening and reading PDF…'}</span><progress max={progress?.pages || 1} value={progress?.page || 0} /></div>}
+      {processing && <div className="member-import-progress"><span>{progress?.phase === 'ocr' ? `Running OCR on scanned page ${progress.page} of ${progress.pages}…` : progress?.phase === 'extracting' ? `Reading page ${progress.page} of ${progress.pages}…` : 'Opening and reading PDF…'}</span><progress max={progress?.pages || 1} value={progress?.page || 0} /></div>}
       {importing && <div className="member-import-progress"><span>Saving batch {importProgress.completed + 1} of {importProgress.total}…</span><progress max={importProgress.total || 1} value={importProgress.completed} /></div>}
       {error && <ErrorBox text={error} />}
       {file && !processing && records.length === 0 && warnings.length > 0 && <>
@@ -1194,7 +1202,6 @@ export default function App() {
         {page === 'Settings' && <section className="panel live-panel"><PanelTitle eyebrow="ACCOUNT PREFERENCES" title="Settings" /><div className="settings-card"><div><b>Account</b><span>{profile.full_name} · {profile.email}</span><small>Assigned role: {roleLabel(profile)}</small></div><ShieldCheck size={22} /></div><div className="settings-card"><div><b>Profile</b><span>Edit your display name, student number, or year level.</span></div><button type="button" className="outline-btn" onClick={() => setModal({ type: 'profileEdit' })}>Edit profile</button></div><div className="settings-card"><div><b>Password</b><span>Update your password using your current password.</span></div><div className="settings-actions"><button type="button" className="outline-btn" onClick={() => setModal({ type: 'passwordChange' })}><KeyRound size={15} />Change password</button></div></div>{hasAdminRole && <div className="settings-card workspace-card"><div><b>Workspace</b><span>Switch between admin and member preview for this account.</span></div><button type="button" className="outline-btn" onClick={() => { const next = isAdmin ? 'member' : 'admin'; setViewMode(next); safeSet('jpcs-workspace', next); setPage('Overview'); notify(isAdmin ? 'Member workspace preview opened.' : 'Admin workspace opened.') }}>{isAdmin ? 'Switch to member view' : 'Switch to admin view'}</button></div>}<button type="button" className="logout-link settings-logout" onClick={signOut}>Sign out</button></section>}
         {page === 'Verify pass' && <section className="panel live-panel checkin-panel"><PanelTitle eyebrow="JPCS EVENT CHECK-IN" title="Entrance pass verification" />{!hasAdminRole ? <ErrorBox text="Only authorized event officers can validate entrance passes." /> : <><p className="muted">Pass token: <b>{location.pathname.split('/').pop()}</b></p><button type="button" className="primary" disabled={busy || checkin?.valid || checkin?.payLater} onClick={checkPass}>{busy ? 'Checking…' : 'Verify and check in'}</button>{checkin && <div className={`checkin-result ${checkin.valid ? 'valid' : 'invalid'}`}>{checkin.valid ? `Valid pass · ${checkin.member} · ${checkin.event}` : checkin.payLater ? `Pay Later · ${checkin.member} · ${checkin.event} · Not paid yet; due ${dateTime(checkin.dueAt)}. This is not an entrance pass yet.` : checkin.checkedIn ? `Already checked in at ${dateTime(checkin.checkedInAt)}` : checkin.error || 'Pass is invalid.'}</div>}</>}</section>}
         {error && <ErrorBox text={error} onClose={() => setError('')} />}
-        <footer><span>© {new Date().getFullYear()} JPCS · Payment Portal</span><span>Payments are manually verified by JPCS officers.</span></footer>
       </div>
     </main>
     <nav className={`bottom-nav ${isAdmin ? 'admin-bottom-nav' : 'member-bottom-nav'}`}>{mobileNav.map(([name, Icon]) => <button key={name} type="button" className={`bottom-nav-btn ${page === name ? 'active' : ''}`} onClick={() => { if (name === 'More') { setMoreOpen(o => !o); return } navigate(name); setMoreOpen(false) }}><Icon size={20} /><span>{name === 'Overview' ? 'Dashboard' : name === 'My payments' ? 'My Payments' : name === 'My passes' ? 'My Passes' : name === 'Payments' ? 'Payments' : name}</span>{name === 'Payments' && pendingBadge > 0 && <i className="bottom-badge">{pendingBadge}</i>}</button>)}{moreOpen && isAdmin && <div className="more-menu"><button type="button" onClick={() => { navigate('Members'); setMoreOpen(false) }}><Users size={16} /> Members</button><button type="button" onClick={() => { navigate('Reports'); setMoreOpen(false) }}><Activity size={16} /> Reports</button><button type="button" onClick={() => { navigate('Settings'); setMoreOpen(false) }}><Settings size={16} /> Settings</button></div>}</nav>
