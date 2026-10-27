@@ -1,7 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase } from './lib/supabase'
-import { Activity, AlertTriangle, ArrowRight, Banknote, CalendarDays, Check, CheckCircle2, ChevronRight, CircleHelp, Clock3, CreditCard, Download, ExternalLink, FileImage, Home, Landmark, LogOut, Maximize2, Menu, Minimize2, Moon, MoreHorizontal, Pencil, Plus, QrCode, RefreshCw, ScanLine, Search, Settings, ShieldCheck, Sun, Ticket, Trash2, Upload, Users, Wallet, X } from 'lucide-react'
+import { invokeWithSessionRefresh } from './lib/session'
+import { Activity, AlertTriangle, ArrowRight, Banknote, CalendarDays, Check, CheckCircle2, ChevronRight, CircleHelp, Clock3, CreditCard, Download, ExternalLink, FileImage, Home, KeyRound, Landmark, LogOut, Maximize2, Menu, Minimize2, Moon, MoreHorizontal, Pencil, Plus, QrCode, RefreshCw, ScanLine, Search, Settings, ShieldCheck, Sun, Ticket, Trash2, Upload, Users, Wallet, X } from 'lucide-react'
 import { extractStudentDirectoryPdf, fingerprintFile, MAX_DIRECTORY_PDF_BYTES } from './lib/studentDirectoryPdf'
 
 const CheckInScanner = lazy(() => import('./components/CheckInScanner'))
@@ -150,6 +151,7 @@ const api = async (path, options = {}, context = 'request') => {
   let action, params = {}
   if (path === '/api/profile') action = options.method === 'PATCH' ? 'profile.update' : 'profile.get'
   else if (path === '/api/profile/password') action = 'profile.password'
+  else if (path === '/api/profile/password/change') action = 'profile.password.change'
   else if (path === '/api/members/create') action = 'members.create'
   else if (path === '/api/members/import') action = 'members.import'
   else if (path === '/api/members/role') action = 'members.role'
@@ -167,9 +169,7 @@ const api = async (path, options = {}, context = 'request') => {
   else if (path.startsWith('/api/passes/') && path.endsWith('/qr')) { action = 'passes.qr'; params.passId = segments.at(-2) }
   else throw new Error('Something went wrong. Please try again later.')
 
-  const { data: { session }, error: sessionError } = await supabase.auth.getSession()
-  if (sessionError || !session?.access_token) throw new Error(friendlyError(sessionError || new Error('session missing'), 'auth'))
-  const { data, error } = await supabase.functions.invoke('jpcs-api', { body: { action, params, input: requestBody }, headers: { Authorization: `Bearer ${session.access_token}` } })
+  const { data, error } = await invokeWithSessionRefresh(supabase.auth, session => supabase.functions.invoke('jpcs-api', { body: { action, params, input: requestBody }, headers: { Authorization: `Bearer ${session.access_token}` } }))
   if (error) {
     let message = error.message
     try { const detail = await error.context?.json(); message = detail?.error || message } catch {}
@@ -239,6 +239,40 @@ function ConfirmModal({ title = 'Please confirm', message, confirmText = 'Confir
     <p className="confirm-modal-message">{message}</p>
     {error && <ErrorBox text={error} />}
     <div className="modal-actions"><button type="button" className="outline-btn" onClick={close} disabled={busy}>Cancel</button><button type="button" className={destructive ? 'reject-btn solid' : 'primary'} onClick={confirm} disabled={busy}>{busy ? 'Please wait…' : confirmText}</button></div>
+  </Modal>
+}
+
+function PasswordModal({ onClose, onChanged }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const submit = async event => {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    const password = form.get('password')
+    if (password !== form.get('confirm')) { setError('The new passwords do not match.'); return }
+    try {
+      setBusy(true)
+      setError('')
+      await api('/api/profile/password/change', {
+        method: 'POST',
+        body: JSON.stringify({ currentPassword: form.get('currentPassword'), password })
+      }, 'auth')
+      onChanged()
+      onClose()
+    } catch (ex) { setError(ex.message || 'Could not update your password.') }
+    finally { setBusy(false) }
+  }
+  const close = () => { if (!busy) onClose() }
+  return <Modal onClose={close} className="profile-modal password-modal">
+    <div className="modal-heading"><div><p className="eyebrow">ACCOUNT SECURITY</p><h2>Change password</h2></div><ModalClose onClick={close} /></div>
+    <p className="muted">Use at least 12 characters. Avoid reusing a password from another account.</p>
+    <form onSubmit={submit}>
+      <label htmlFor="current-password">Current password</label><input id="current-password" name="currentPassword" className="modal-input" type="password" autoComplete="current-password" required />
+      <label htmlFor="new-password">New password</label><input id="new-password" name="password" className="modal-input" type="password" minLength="12" maxLength="128" autoComplete="new-password" required />
+      <label htmlFor="confirm-password">Confirm new password</label><input id="confirm-password" name="confirm" className="modal-input" type="password" minLength="12" maxLength="128" autoComplete="new-password" required />
+      {error && <ErrorBox text={error} />}
+      <div className="modal-actions"><button type="button" className="outline-btn" onClick={close} disabled={busy}>Cancel</button><button type="submit" className="primary" disabled={busy}>{busy ? 'Saving…' : 'Update password'}</button></div>
+    </form>
   </Modal>
 }
 
@@ -1005,8 +1039,12 @@ export default function App() {
     setDataLoading(true); setError('')
     try {
       const eventRequest = supabase.from('events').select('*').order('event_date', { ascending: true, nullsFirst: false })
-      const registrationRequest = supabase.from('registrations').select('id,member_id,event_id,price,created_at,pay_later_started_at,pay_later_due_at,events(*),profiles(full_name,email),payments(*),passes(*)').order('created_at', { ascending: false })
-      const adminRequests = profile.role !== 'member' ? Promise.all([
+      const isMember = profile.role === 'member'
+      const registrationFields = 'id,member_id,event_id,price,created_at,pay_later_started_at,pay_later_due_at'
+      const registrationRelations = isMember ? 'events(*),payments(*),passes(*)' : 'events(*),profiles(full_name,email),passes(*)'
+      let registrationRequest = supabase.from('registrations').select(`${registrationFields},${registrationRelations}`).order('created_at', { ascending: false })
+      if (isMember) registrationRequest = registrationRequest.eq('member_id', profile.id)
+      const adminRequests = !isMember ? Promise.all([
         supabase.from('payments').select('*,registrations(id,member_id,event_id,profiles(full_name,email,student_number,year_level),events(name,price,event_date))').order('submitted_at', { ascending: false }),
         supabase.from('profiles').select('*').order('full_name')
       ]) : Promise.resolve(null)
@@ -1014,16 +1052,27 @@ export default function App() {
       if (e.error) throw e.error
       if (r.error) throw r.error
       if (adminData && (adminData[0].error || adminData[1].error)) throw adminData[0].error || adminData[1].error
+      const registrationPayments = new Map()
+      if (adminData) for (const payment of adminData[0].data || []) {
+        const registrationId = payment.registrations?.id
+        if (!registrationId) continue
+        if (!registrationPayments.has(registrationId)) registrationPayments.set(registrationId, [])
+        registrationPayments.get(registrationId).push(payment)
+      }
+      const registrationRows = (r.data || []).map(registration => ({
+        ...registration,
+        payments: adminData ? registrationPayments.get(registration.id) || [] : registration.payments || [],
+      }))
       setEvents(e.data || [])
-      setRegistrations(r.data || [])
+      setRegistrations(registrationRows)
       if (adminData) {
         setPayments(adminData[0].data || [])
         setMembers(adminData[1].data || [])
       } else {
-        setPayments((r.data || []).flatMap(x => (x.payments || []).map(p => ({ ...p, registration: x, event: x.events }))))
+        setPayments(registrationRows.flatMap(x => (x.payments || []).map(p => ({ ...p, registration: x, event: x.events }))))
         setMembers([])
       }
-      setPasses((r.data || []).flatMap(x => asArray(x.passes).map(p => ({ ...p, registration: x, event: x.events }))))
+      setPasses(registrationRows.flatMap(x => asArray(x.passes).map(p => ({ ...p, registration: x, event: x.events }))))
     } catch (ex) { setError(friendlyError(ex, 'load')) } finally { setDataLoading(false) }
   }, [profile, refresh])
   useEffect(() => { load() }, [load])
@@ -1140,7 +1189,7 @@ export default function App() {
           <label><span>To date</span><input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} /></label>
           <button type="button" className="text-button report-clear-filters" onClick={() => { setFilterState('all'); setFilterMethod('all'); setFilterEvent('all'); setFilterYear('all'); setDateFrom(''); setDateTo('') }}>Clear filters</button>
         </div><PaymentTable items={reportItems} admin={isAdmin} onOpen={openDetail} /></section>}
-        {page === 'Settings' && <section className="panel live-panel"><PanelTitle eyebrow="ACCOUNT PREFERENCES" title="Settings" /><div className="settings-card"><div><b>Account</b><span>{profile.full_name} · {profile.email}</span><small>Assigned role: {roleLabel(profile)}</small></div><ShieldCheck size={22} /></div><div className="settings-card"><div><b>Profile</b><span>Edit your display name, student number, or year level.</span></div><button type="button" className="outline-btn" onClick={() => setModal({ type: 'profileEdit' })}>Edit profile</button></div>{hasAdminRole && <div className="settings-card workspace-card"><div><b>Workspace</b><span>Switch between admin and member preview for this account.</span></div><button type="button" className="outline-btn" onClick={() => { const next = isAdmin ? 'member' : 'admin'; setViewMode(next); safeSet('jpcs-workspace', next); setPage('Overview'); notify(isAdmin ? 'Member workspace preview opened.' : 'Admin workspace opened.') }}>{isAdmin ? 'Switch to member view' : 'Switch to admin view'}</button></div>}<button type="button" className="logout-link settings-logout" onClick={signOut}>Sign out</button></section>}
+        {page === 'Settings' && <section className="panel live-panel"><PanelTitle eyebrow="ACCOUNT PREFERENCES" title="Settings" /><div className="settings-card"><div><b>Account</b><span>{profile.full_name} · {profile.email}</span><small>Assigned role: {roleLabel(profile)}</small></div><ShieldCheck size={22} /></div><div className="settings-card"><div><b>Profile</b><span>Edit your display name, student number, or year level.</span></div><button type="button" className="outline-btn" onClick={() => setModal({ type: 'profileEdit' })}>Edit profile</button></div><div className="settings-card"><div><b>Password</b><span>Update your password using your current password.</span></div><div className="settings-actions"><button type="button" className="outline-btn" onClick={() => setModal({ type: 'passwordChange' })}><KeyRound size={15} />Change password</button></div></div>{hasAdminRole && <div className="settings-card workspace-card"><div><b>Workspace</b><span>Switch between admin and member preview for this account.</span></div><button type="button" className="outline-btn" onClick={() => { const next = isAdmin ? 'member' : 'admin'; setViewMode(next); safeSet('jpcs-workspace', next); setPage('Overview'); notify(isAdmin ? 'Member workspace preview opened.' : 'Admin workspace opened.') }}>{isAdmin ? 'Switch to member view' : 'Switch to admin view'}</button></div>}<button type="button" className="logout-link settings-logout" onClick={signOut}>Sign out</button></section>}
         {page === 'Verify pass' && <section className="panel live-panel checkin-panel"><PanelTitle eyebrow="JPCS EVENT CHECK-IN" title="Entrance pass verification" />{!hasAdminRole ? <ErrorBox text="Only authorized event officers can validate entrance passes." /> : <><p className="muted">Pass token: <b>{location.pathname.split('/').pop()}</b></p><button type="button" className="primary" disabled={busy || checkin?.valid || checkin?.payLater} onClick={checkPass}>{busy ? 'Checking…' : 'Verify and check in'}</button>{checkin && <div className={`checkin-result ${checkin.valid ? 'valid' : 'invalid'}`}>{checkin.valid ? `Valid pass · ${checkin.member} · ${checkin.event}` : checkin.payLater ? `Pay Later · ${checkin.member} · ${checkin.event} · Not paid yet; due ${dateTime(checkin.dueAt)}. This is not an entrance pass yet.` : checkin.checkedIn ? `Already checked in at ${dateTime(checkin.checkedInAt)}` : checkin.error || 'Pass is invalid.'}</div>}</>}</section>}
         {error && <ErrorBox text={error} onClose={() => setError('')} />}
         <footer><span>© {new Date().getFullYear()} JPCS · Payment Portal</span><span>Payments are manually verified by JPCS officers.</span></footer>
@@ -1152,6 +1201,7 @@ export default function App() {
     {modal?.type === 'paymentDetail' && <PaymentDetailModal payment={modal.payment} admin={isAdmin} profile={profile} onClose={() => setModal(null)} onReview={handleReview} onDelete={handleDeletePayment} requestConfirm={requestConfirm} />}
     {modal?.type === 'event' && <EventModal event={modal.event} onClose={() => setModal(null)} onSaved={() => setRefresh(v => v + 1)} notify={notify} setError={setError} requestConfirm={requestConfirm} />}
     {modal?.type === 'profileEdit' && <ProfileModal profile={profile} onClose={() => setModal(null)} onSaved={setProfile} notify={notify} setError={setError} />}
+    {modal?.type === 'passwordChange' && <PasswordModal onClose={() => setModal(null)} onChanged={() => { setProfile(current => ({ ...current, must_change_password: false })); notify('Password updated successfully.') }} />}
     {modal?.type === 'addMember' && <AddMemberModal onClose={() => setModal(null)} onCreated={() => setRefresh(v => v + 1)} notify={notify} />}
     {modal?.type === 'memberEdit' && <MemberEditModal member={modal.member} onClose={() => setModal(null)} onSaved={() => setRefresh(v => v + 1)} />}
     {modal?.type === 'memberImport' && profile.role === 'admin' && <MemberImportModal onClose={() => setModal(null)} onImported={() => setRefresh(v => v + 1)} members={members} />}

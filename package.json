@@ -8,6 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test:parser": "node --test src/lib/studentDirectoryParser.test.js src/lib/studentDirectoryPdf.test.js",
+    "test:cors": "node --test supabase/functions/jpcs-api/cors.test.js",
+    "test:session": "node --test src/lib/session.test.js",
     "provision": "node scripts/provision-users.js"
   },
   "dependencies": {

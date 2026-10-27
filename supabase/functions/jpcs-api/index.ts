@@ -1,40 +1,40 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1'
 import QRCode from 'npm:qrcode@1.5.4'
-
-const cors={
-  'Access-Control-Allow-Headers':'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods':'POST, OPTIONS',
-}
+import { corsHeadersFor, corsResponse, normalizeOrigin, productionOrigin, resolveCorsOrigin } from './cors.js'
 const htmlEscapes:Record<string,string>={'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}
 const escapeHtml=(value:unknown)=>String(value??'').replace(/[&<>"']/g,c=>htmlEscapes[c]||c)
 const first=(value:any)=>Array.isArray(value)?value[0]:value
 const serviceKey=Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const supabaseUrl=Deno.env.get('SUPABASE_URL')!
 const anonKey=Deno.env.get('SUPABASE_ANON_KEY')||Deno.env.get('SUPABASE_PUBLISHABLE_KEY')!
-const appOrigin=Deno.env.get('APP_ORIGIN')||''
-const normalizeOrigin=(value:string|null)=>{
-  try{const url=new URL(value||'');return url.protocol==='http:'||url.protocol==='https:'?url.origin:''}catch{return ''}
-}
-const configuredAppOrigin=normalizeOrigin(appOrigin)
-const isLocalOrigin=(origin:string)=>/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)
-const makeResponse=(body:unknown,status=200,origin='null')=>new Response(JSON.stringify(body),{status,headers:{...cors,'Access-Control-Allow-Origin':origin,'Vary':'Origin','Content-Type':'application/json','Cache-Control':'no-store','Pragma':'no-cache','X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY','Referrer-Policy':'no-referrer'}})
-const resolveAppOrigin=(requestOrigin:string)=>{
-  if(requestOrigin&&configuredAppOrigin&&requestOrigin===configuredAppOrigin)return configuredAppOrigin
-  if(isLocalOrigin(requestOrigin))return configuredAppOrigin||requestOrigin
-  return configuredAppOrigin||'https://example.invalid'
-}
+const makeResponse=(body:unknown,status=200,origin:string|null=null)=>corsResponse(body,status,origin)
 
 Deno.serve(async(req)=>{
   const originHeader=req.headers.get('Origin')
-  const requestOrigin=normalizeOrigin(originHeader)
-  if(originHeader&&(!requestOrigin||(!isLocalOrigin(requestOrigin)&&requestOrigin!==configuredAppOrigin)))return makeResponse({error:'Origin not allowed.'},403)
-  const allowedOrigin=requestOrigin||configuredAppOrigin||'null'
+  // Read APP_ORIGIN for each request so secret updates are not captured by a
+  // module-level value in a warm Edge Function isolate.
+  const appOrigin=Deno.env.get('APP_ORIGIN')||''
+  const corsOrigin=resolveCorsOrigin(originHeader,appOrigin)
+  if(!corsOrigin.allowed)return makeResponse({error:'Origin not allowed.'},403)
+  const allowedOrigin=corsOrigin.origin
+  const resolveAppOrigin=(requestOrigin:string|null)=>{
+    const normalized=normalizeOrigin(requestOrigin)
+    if(normalized&&/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(normalized))return corsOrigin.configuredOrigin||normalized
+    return normalized||corsOrigin.configuredOrigin||productionOrigin
+  }
   const response=(body:unknown,status=200)=>makeResponse(body,status,allowedOrigin)
-  if(req.method==='OPTIONS')return new Response('ok',{headers:{...cors,'Access-Control-Allow-Origin':allowedOrigin,'Vary':'Origin','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY','Referrer-Policy':'no-referrer'}})
+  if(req.method==='OPTIONS'){
+    const headers=corsHeadersFor(allowedOrigin)
+    headers.set('Cache-Control','no-store')
+    headers.set('X-Content-Type-Options','nosniff')
+    headers.set('X-Frame-Options','DENY')
+    headers.set('Referrer-Policy','no-referrer')
+    return new Response(null,{status:204,headers})
+  }
   if(req.method!=='POST')return response({error:'Method not allowed.'},405)
   try{
     const authorization=req.headers.get('Authorization')||''
-    const resolvedOrigin=resolveAppOrigin(normalizeOrigin(req.headers.get('Origin')))
+     const resolvedOrigin=resolveAppOrigin(originHeader)
     const {action,params={},input={}}=await req.json()
     const headerToken=authorization.replace(/^Bearer\s+/i,'')
     const admin=createClient(supabaseUrl,serviceKey,{auth:{autoRefreshToken:false,persistSession:false}})
@@ -60,6 +60,19 @@ Deno.serve(async(req)=>{
       if(error)return response({error:error.message},400)
       const {error:updateError}=await admin.from('profiles').update({must_change_password:false}).eq('id',user.id)
       if(updateError)return response({error:'Password changed, but profile setup failed. Retry the password change.'},500)
+      return response({ok:true})
+    }
+    if(action==='profile.password.change'){
+      const {currentPassword,password}=input
+      if(typeof currentPassword!=='string'||!currentPassword)return response({error:'Enter your current password.'},400)
+      if(typeof password!=='string'||password.length<12||password.length>128||password==='JPCS2026')return response({error:'Choose a new password with at least 12 characters.'},400)
+      if(password===currentPassword)return response({error:'Your new password must be different from your current password.'},400)
+      const {error:verifyError}=await authClient.auth.signInWithPassword({email:user.email,password:currentPassword})
+      if(verifyError)return response({error:'Your current password is incorrect.'},400)
+      const {error:updateError}=await admin.auth.admin.updateUserById(user.id,{password})
+      if(updateError)return response({error:updateError.message},400)
+      const {error:profileUpdateError}=await admin.from('profiles').update({must_change_password:false}).eq('id',user.id)
+      if(profileUpdateError)return response({error:'Password changed, but profile setup failed. Please sign in again.'},500)
       return response({ok:true})
     }
     if(action==='profile.update'){
