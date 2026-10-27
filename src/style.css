@@ -497,6 +497,8 @@ html:has(.login-screen),body:has(.login-screen),#root:has(.login-screen){width:1
 .password-modal .modal-input{width:100%;box-sizing:border-box}
 @media(max-width:600px){.settings-actions{grid-column:1/-1;justify-content:stretch}.settings-actions .outline-btn{flex:1 1 150px}.settings-card:has(.settings-actions){grid-template-columns:1fr}}
 @media(max-width:800px){.login-screen{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}.login-story{display:none}.login-panel{min-height:100%;box-sizing:border-box}}
+.login-footnote-mobile{display:none}
+@media(max-width:800px){.login-footnote-desktop{display:none}.login-footnote-mobile{display:inline}}
 @media(max-width:650px){
   section.panel.live-panel:has(.member-filters)>.panel-head{display:grid;gap:14px;align-items:stretch;margin-bottom:16px}
   section.panel.live-panel:has(.member-filters)>.panel-head>div:first-child{min-width:0}
