@@ -49,7 +49,7 @@ export function friendlyError(error) {
     lower.includes('password') &&
     (lower.includes('12') || lower.includes('short') || lower.includes('character'))
   ) {
-    return 'Please choose a password with at least 12 characters.'
+    return 'Please choose a password with at least 6 characters.'
   }
   if (lower.includes('passwords do not match')) {
     return 'The passwords you entered do not match. Please re-type them.'

@@ -485,6 +485,10 @@ html:has(.login-screen),body:has(.login-screen),#root:has(.login-screen){width:1
 .app-shell.dark .event-payment-progress progress,.app-shell.dark .event-payment-progress progress::-webkit-progress-bar{background:#26354c}
 .app-shell.dark .event-payment-progress progress::-webkit-progress-value,.app-shell.dark .event-payment-progress progress::-moz-progress-bar{background:#91b3e5}
 .app-shell.dark .event-card-actions .pay-button{background:#172740;color:#f1f5fb}
+.dashboard-passes-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;margin-left:auto;white-space:nowrap}
+.member-dashboard-stats .stat-icon{background:#e9ebe8!important;color:#29445f!important}
+.app-shell.dark .member-dashboard-stats .stat-icon{background:#202c40!important;color:#b8c9e0!important}
+@media(max-width:650px){.app-shell:has(.member-dashboard-stats) .dashboard-banner{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;min-height:92px}.app-shell:has(.member-dashboard-stats) .dashboard-banner>div{min-width:0}.app-shell:has(.member-dashboard-stats) .dashboard-passes-btn{align-self:center;max-width:100px;min-height:36px;margin:0;padding:6px 8px;gap:4px;border-radius:9px;font-size:.62rem;line-height:1.15;white-space:normal}.app-shell:has(.member-dashboard-stats) .dashboard-passes-btn svg{width:14px;height:14px;flex:none}.app-shell:has(.member-dashboard-stats) .dashboard-banner .eyebrow{font-size:.48rem;letter-spacing:.08em}.app-shell:has(.member-dashboard-stats) .dashboard-banner .muted{font-size:.66rem}}
 .settings-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
 .settings-actions .outline-btn{display:inline-flex;align-items:center;justify-content:center;gap:7px}
 .password-modal form{display:grid;gap:10px}

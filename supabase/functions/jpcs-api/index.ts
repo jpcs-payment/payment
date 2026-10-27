@@ -55,7 +55,7 @@ Deno.serve(async(req)=>{
     if(action==='profile.get')return response({profile})
     if(action==='profile.password'){
       const password=input.password
-      if(typeof password!=='string'||password.length<12||password.length>128||password==='JPCS2026')return response({error:'Choose a new password with at least 12 characters.'},400)
+      if(typeof password!=='string'||password.length<6||password.length>128||password==='JPCS2026')return response({error:'Choose a new password with at least 6 characters.'},400)
       const {error}=await admin.auth.admin.updateUserById(user.id,{password})
       if(error)return response({error:error.message},400)
       const {error:updateError}=await admin.from('profiles').update({must_change_password:false}).eq('id',user.id)
@@ -65,7 +65,7 @@ Deno.serve(async(req)=>{
     if(action==='profile.password.change'){
       const {currentPassword,password}=input
       if(typeof currentPassword!=='string'||!currentPassword)return response({error:'Enter your current password.'},400)
-      if(typeof password!=='string'||password.length<12||password.length>128||password==='JPCS2026')return response({error:'Choose a new password with at least 12 characters.'},400)
+      if(typeof password!=='string'||password.length<6||password.length>128||password==='JPCS2026')return response({error:'Choose a new password with at least 6 characters.'},400)
       if(password===currentPassword)return response({error:'Your new password must be different from your current password.'},400)
       const {error:verifyError}=await authClient.auth.signInWithPassword({email:user.email,password:currentPassword})
       if(verifyError)return response({error:'Your current password is incorrect.'},400)
