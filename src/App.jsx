@@ -307,13 +307,14 @@ function EventCard({ event, registration, onPay, isAdmin, onEdit }) {
     yearTime: `${eventDate.getFullYear()} · ${eventDate.toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' })}`
   } : null
   const isMerch = /\b(jacket|merch(?:andise)?|shirt|hoodie|apparel|uniform)\b/i.test(`${event.name || ''} ${event.description || ''}`)
+  const semester = /\b(film\s*showing|boot\s*camp|bootcamp)\b/i.test(event.name || '') ? 'First Semester' : /\b(jacket|field\s*trip|fieldtrip)\b/i.test(event.name || '') ? 'Second Semester' : ''
   return <article className={`event-card ${isAdmin ? 'admin-event-card' : 'member-event-card'}`}>
     <div className="event-art"><Ticket size={28} strokeWidth={1.7} /><span className="event-date-label">EVENT DATE</span><b>{dateParts?.day || 'TBA'}</b><span className="event-date-time">{dateParts?.yearTime || 'Date to be announced'}</span><small>{event.venue || 'JPCS · EVENTS'}</small></div>
     <div className="event-detail">
-      <div className="event-card-topline"><span className="event-type-badge">{isMerch ? 'JPCS Merch' : 'JPCS Event'}</span>{event.payment_deadline && <span className="event-deadline"><Clock3 size={14} />Due {new Date(event.payment_deadline).toLocaleDateString('en-PH', { month: 'short', day: 'numeric' })}</span>}</div>
+      <div className="event-card-topline"><span className="event-type-badge">{isMerch ? 'JPCS Merch' : 'JPCS Event'}{semester && ` · ${semester}`}</span>{event.payment_deadline && <span className="event-deadline"><Clock3 size={14} />Due {new Date(event.payment_deadline).toLocaleDateString('en-PH', { month: 'short', day: 'numeric' })}</span>}</div>
       <h3>{event.name}</h3>
       <p className="muted event-description">{event.description || 'Join us at this JPCS event.'}</p>
-      {!isAdmin && <div className="event-payment-progress"><div><span>Payment progress</span><b>{paymentProgress}%</b></div><progress max="100" value={paymentProgress} aria-label={`Payment progress for ${event.name}`} /></div>}
+      {!isAdmin && <div className="event-payment-progress"><div><span>Payment progress</span><b>{paymentProgress}%</b></div><progress max="100" value={paymentProgress} aria-label={`Payment progress for ${event.name}`} />{event.partial_payments_enabled !== false && price > 0 && !fullyPaid && <small className="partial-payments-label">Partial payments accepted</small>}</div>}
       <div className="event-bottom">
         <div className="event-price-box">{!isAdmin && <small className="event-due-label"><Clock3 size={14} />Due {event.payment_deadline ? date(event.payment_deadline) : 'anytime'}</small>}<b>{money(isAdmin ? price : remaining)}</b>{!isAdmin && <small className="method">{statusText}</small>}</div>
         <div className="event-card-actions">{isAdmin ? <button type="button" className="pay-button secondary" onClick={onEdit}><Pencil size={14} /> Edit</button> : <button type="button" className="pay-button" disabled={fullyPaid || status === 'Pending verification'} onClick={onPay}>{fullyPaid ? 'Paid' : status === 'Pending verification' ? 'Pending' : `Pay ${money(remaining)} Now`} <ArrowRight size={15} /></button>}{!isAdmin && <button type="button" className="event-info-button" aria-label={`${showInfo ? 'Hide' : 'View'} details for ${event.name}`} aria-expanded={showInfo} onClick={() => setShowInfo(value => !value)}><CircleHelp size={17} /></button>}</div>
@@ -768,6 +769,7 @@ function PaymentModal({ event, registration, onClose, onSubmitted, setError }) {
       const value = Number(amount)
       if (!Number.isFinite(value) || value <= 0) throw new Error('Enter a valid amount.')
       if (value > remaining + 0.000001) throw new Error('That amount is more than the remaining balance for this event.')
+      if (event.partial_payments_enabled === false && Math.abs(value - remaining) > 0.000001) throw new Error('This event requires payment of the full remaining balance.')
       if (method !== 'cash' && reference.trim().length < 4) throw new Error('Enter your transaction reference.')
       if (method !== 'cash' && !file) throw new Error('Upload your payment receipt before submitting.')
       let receiptPath = null
@@ -811,7 +813,7 @@ function PaymentModal({ event, registration, onClose, onSubmitted, setError }) {
       {!payLater && meta.qr && <div className="qr-payment"><div className="qr-frame"><img src={meta.qr} alt={`${meta.label} QR code`} /></div><p className="muted">Scan the QR code with your e-wallet, then upload a clear screenshot or photo of your receipt.</p></div>}
       {!payLater && method === 'cash' && <div className="cash-note"><Banknote size={18} /><p>Pay in person to a JPCS officer. No receipt upload is needed.</p></div>}
       {!payLater && <div className="form-row">
-        <div className="form-field"><label className="form-label" htmlFor="pay-amount">Amount to submit</label><input id="pay-amount" className="modal-input" name="amount" type="number" min="0.01" step="0.01" max={remaining} value={amount} onChange={e => { amountEdited.current = true; setAmount(e.target.value) }} required /></div>
+         <div className="form-field"><label className="form-label" htmlFor="pay-amount">Amount to submit</label><input id="pay-amount" className="modal-input" name="amount" type="number" min={event.partial_payments_enabled === false ? remaining : '0.01'} step="0.01" max={remaining} value={amount} onChange={e => { amountEdited.current = true; setAmount(e.target.value) }} required />{event.partial_payments_enabled === false && <small className="muted">Pay the full remaining balance; partial payments are disabled for this event.</small>}</div>
       </div>}
       {!payLater && method !== 'cash' && <><label className="form-label" htmlFor="pay-ref">Transaction reference</label><input id="pay-ref" className="modal-input" name="reference" maxLength={120} value={reference} onChange={e => setReference(e.target.value)} placeholder="Enter your GCash/MariBank reference number" required /></>}
       {!payLater && method !== 'cash' && <><label className="form-label">Receipt image (required)</label><input className="file-input" name="receipt" type="file" accept="image/jpeg,image/png,image/webp" onChange={handleFile} required /><small className="muted">JPG, PNG, or WebP · up to 5 MB</small></>}
@@ -907,6 +909,7 @@ function EventModal({ event, onClose, onSaved, notify, setError, requestConfirm 
   const [instructions, setInstructions] = useState(event?.payment_instructions || '')
   const [active, setActive] = useState(event?.active ?? true)
   const [payLaterEnabled, setPayLaterEnabled] = useState(event?.pay_later_enabled ?? true)
+  const [partialPaymentsEnabled, setPartialPaymentsEnabled] = useState(event?.partial_payments_enabled ?? true)
   const [methods, setMethods] = useState(event?.methods || ['cash', 'gcash', 'maribank'])
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -916,7 +919,7 @@ function EventModal({ event, onClose, onSaved, notify, setError, requestConfirm 
     if (methods.length === 0) { setErr('Select at least one payment method.'); return }
     setBusy(true); setErr(''); setError('')
     try {
-      const payload = { name, description, price: Number(price), event_date: localDateTimeToIso(eventDate), venue, payment_deadline: localDateTimeToIso(deadline), payment_instructions: instructions, active, methods, pay_later_enabled: payLaterEnabled }
+      const payload = { name, description, price: Number(price), event_date: localDateTimeToIso(eventDate), venue, payment_deadline: localDateTimeToIso(deadline), payment_instructions: instructions, active, methods, pay_later_enabled: payLaterEnabled, partial_payments_enabled: partialPaymentsEnabled }
       if (!payload.name) throw new Error('Enter an event name.')
       if (!Number.isFinite(payload.price) || payload.price < 0) throw new Error('Enter a valid price.')
       let query
@@ -968,6 +971,7 @@ function EventModal({ event, onClose, onSaved, notify, setError, requestConfirm 
         {['cash', 'gcash', 'maribank'].map(m => <label key={m} className="checkbox"><input type="checkbox" checked={methods.includes(m)} onChange={() => toggle(m)} />{METHOD_META[m].label}</label>)}
       </div>
       <label className="checkbox pay-later-toggle"><input type="checkbox" checked={payLaterEnabled} onChange={e => setPayLaterEnabled(e.target.checked)} />Enable Pay Later for this event <small>Members have 3 days to pay; actual payments still require approval.</small></label>
+      <label className="checkbox pay-later-toggle"><input type="checkbox" checked={partialPaymentsEnabled} onChange={e => setPartialPaymentsEnabled(e.target.checked)} />Allow partial payments <small>Members may submit less than the full remaining balance.</small></label>
       <label className="checkbox"><input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} />Event active</label>
       <div className="modal-actions">{event?.id && <><button type="button" className="outline-btn event-delete-button" onClick={remove} disabled={busy}><Trash2 size={15} />Delete</button><span className="modal-actions-spacer" /></>}<button type="button" className="outline-btn" onClick={onClose} disabled={busy}>Cancel</button><button type="submit" className="primary" disabled={busy}>{busy ? 'Saving…' : 'Save event'}</button></div>
     </form>

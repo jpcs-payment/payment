@@ -486,6 +486,7 @@ html:has(.login-screen),body:has(.login-screen),#root:has(.login-screen){width:1
 .app-shell.dark .event-payment-progress progress::-webkit-progress-value,.app-shell.dark .event-payment-progress progress::-moz-progress-bar{background:#91b3e5}
 .app-shell.dark .event-card-actions .pay-button{background:#172740;color:#f1f5fb}
 .app-shell .nav-badge{background:#fff!important;color:#101e42!important}
+.partial-payments-label{color:var(--muted);font-size:.72rem;font-weight:600}
 .dashboard-passes-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;margin-left:auto;white-space:nowrap}
 .member-dashboard-stats .stat-icon{background:#e9ebe8!important;color:#29445f!important}
 .app-shell.dark .member-dashboard-stats .stat-icon{background:#202c40!important;color:#b8c9e0!important}
