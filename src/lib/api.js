@@ -50,7 +50,6 @@ export const api = async (path, options = {}) => {
       action,
       params,
       input: requestBody,
-      sessionAccessToken: session.access_token,
     },
     headers: {
       Authorization: `Bearer ${session.access_token}`,
@@ -64,18 +63,10 @@ export const api = async (path, options = {}) => {
       detail = await error.context?.json()
       message = detail?.error || message
     } catch {}
-    if (path === '/api/members/create') {
-      console.error('Add member invoke error:', error, detail)
-      throw new Error(message || 'Add member request failed.')
-    }
     throw new Error(friendlyError(message))
   }
 
   if (data?.error) {
-    if (path === '/api/members/create') {
-      console.error('Add member data error:', data)
-      throw new Error(data.error || 'Add member request failed.')
-    }
     throw new Error(friendlyError(data.error))
   }
 

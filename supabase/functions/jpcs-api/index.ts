@@ -2,11 +2,9 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1'
 import QRCode from 'npm:qrcode@1.5.4'
 
 const cors={
-  'Access-Control-Allow-Origin':'*',
   'Access-Control-Allow-Headers':'authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Methods':'POST, OPTIONS',
 }
-const response=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{...cors,'Content-Type':'application/json'}})
 const htmlEscapes:Record<string,string>={'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}
 const escapeHtml=(value:unknown)=>String(value??'').replace(/[&<>"']/g,c=>htmlEscapes[c]||c)
 const first=(value:any)=>Array.isArray(value)?value[0]:value
@@ -19,22 +17,26 @@ const normalizeOrigin=(value:string|null)=>{
 }
 const configuredAppOrigin=normalizeOrigin(appOrigin)
 const isLocalOrigin=(origin:string)=>/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)
+const makeResponse=(body:unknown,status=200,origin='null')=>new Response(JSON.stringify(body),{status,headers:{...cors,'Access-Control-Allow-Origin':origin,'Vary':'Origin','Content-Type':'application/json','Cache-Control':'no-store','Pragma':'no-cache','X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY','Referrer-Policy':'no-referrer'}})
 const resolveAppOrigin=(requestOrigin:string)=>{
-  // Prefer the origin the officer is actually using. If they are on localhost,
-  // fall back to APP_ORIGIN so QR codes can point at a LAN or deployed URL.
-  if(requestOrigin&&!isLocalOrigin(requestOrigin))return requestOrigin
-  return configuredAppOrigin||requestOrigin||'https://example.invalid'
+  if(requestOrigin&&configuredAppOrigin&&requestOrigin===configuredAppOrigin)return configuredAppOrigin
+  if(isLocalOrigin(requestOrigin))return configuredAppOrigin||requestOrigin
+  return configuredAppOrigin||'https://example.invalid'
 }
 
 Deno.serve(async(req)=>{
-  if(req.method==='OPTIONS')return new Response('ok',{headers:cors})
+  const originHeader=req.headers.get('Origin')
+  const requestOrigin=normalizeOrigin(originHeader)
+  if(originHeader&&(!requestOrigin||(!isLocalOrigin(requestOrigin)&&requestOrigin!==configuredAppOrigin)))return makeResponse({error:'Origin not allowed.'},403)
+  const allowedOrigin=requestOrigin||configuredAppOrigin||'null'
+  const response=(body:unknown,status=200)=>makeResponse(body,status,allowedOrigin)
+  if(req.method==='OPTIONS')return new Response('ok',{headers:{...cors,'Access-Control-Allow-Origin':allowedOrigin,'Vary':'Origin','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY','Referrer-Policy':'no-referrer'}})
   if(req.method!=='POST')return response({error:'Method not allowed.'},405)
   try{
     const authorization=req.headers.get('Authorization')||''
     const resolvedOrigin=resolveAppOrigin(normalizeOrigin(req.headers.get('Origin')))
-    const {action,params={},input={},sessionAccessToken}=await req.json()
+    const {action,params={},input={}}=await req.json()
     const headerToken=authorization.replace(/^Bearer\s+/i,'')
-    const sessionToken=sessionAccessToken||input.sessionAccessToken||''
     const admin=createClient(supabaseUrl,serviceKey,{auth:{autoRefreshToken:false,persistSession:false}})
 
     if(action==='emails.dispatch'){
@@ -43,7 +45,7 @@ Deno.serve(async(req)=>{
       return response(result)
     }
     const authClient=createClient(supabaseUrl,anonKey,{auth:{autoRefreshToken:false,persistSession:false}})
-    const tokens=[...new Set([headerToken,sessionToken].filter(Boolean))]
+    const tokens=[headerToken].filter(Boolean)
     if(!tokens.length)return response({error:'Authentication required.'},401)
     let user=null,userError=null
     for(const accessToken of tokens){const result=await authClient.auth.getUser(accessToken);user=result.data.user;userError=result.error;if(user)break}
@@ -282,7 +284,7 @@ Deno.serve(async(req)=>{
       if(!event)return response({error:'Event not found.'},404)
       const {count:registrationCount,error:registrationError}=await admin.from('registrations').select('id',{count:'exact',head:true}).eq('event_id',eventId)
       if(registrationError)return response({error:'Could not verify the event registration history.'},500)
-      if((registrationCount||0)>0)return response({error:'This event has registrations or payment history and cannot be deleted. Deactivate it instead.'},409)
+       if((registrationCount||0)>0)return response({error:`This event still has ${registrationCount} registration record${registrationCount===1?'':'s'}. Deleting payment history does not remove registrations; deactivate the event instead.`},409)
       const {error:deleteError}=await admin.from('events').delete().eq('id',eventId)
       if(deleteError){
         if((deleteError as any).code==='23503')return response({error:'This event acquired linked history and cannot be deleted. Deactivate it instead.'},409)
@@ -343,9 +345,9 @@ Deno.serve(async(req)=>{
       if(typeof eventId!=='string'||!/^[-0-9a-f]{36}$/i.test(eventId))return response({error:'Event ID is invalid.'},400)
       const {data:registration,error}=await admin.rpc('submit_pay_later',{p_member:user.id,p_event:eventId})
       if(error)return response({error:error.message},400)
-      const email=await dispatchOutbox(admin,resolvedOrigin,10,`pay-later:${registration.id}`).catch(error=>{
-        console.error('Pay Later email delivery deferred:',error.message)
-        return {sent:0,configured:false,error:error.message}
+       const email=await dispatchOutbox(admin,resolvedOrigin,10,`pay-later:${registration.id}`).catch(error=>{
+         console.error('Pay Later email delivery deferred:',error.message)
+         return {sent:0,configured:false}
       })
       const {data:emailRecord}=await admin.from('email_outbox').select('sent_at').eq('dedupe_key',`pay-later:${registration.id}`).maybeSingle()
       return response({ok:true,registration,email:{...email,sentAt:emailRecord?.sent_at||null}},201)
@@ -393,7 +395,7 @@ Deno.serve(async(req)=>{
       const result={...data,pass:pass?{...pass,qrDataUrl:await QRCode.toDataURL(`${resolvedOrigin}/verify/${pass.token}`)}:null}
       // Email delivery is attempted after the transaction. If provider delivery
       // fails, the durable outbox entry remains pending for the next dispatch.
-      const email=await dispatchOutbox(admin,resolvedOrigin).catch(error=>{console.error('Outbox delivery deferred:',error.message);return {sent:0,configured:false,error:error.message}})
+      const email=await dispatchOutbox(admin,resolvedOrigin).catch(error=>{console.error('Outbox delivery deferred:',error.message);return {sent:0,configured:false}})
       return response({...result,email})
     }
 
@@ -406,16 +408,15 @@ Deno.serve(async(req)=>{
       const member=first(registration?.profiles)?.full_name||'Member'
       const event=first(registration?.events)?.name||'Event'
       if(targetEvent&&registration?.event_id!==targetEvent)return response({valid:false,wrongEvent:true,passId:pass.id,member,event,message:`This pass belongs to ${event}, not the selected event.`})
-      if(pass.pay_later)return response({valid:false,payLater:true,passId:pass.id,member,event,dueAt:registration?.pay_later_due_at||null,message:`Pay Later · unpaid. Due ${registration?.pay_later_due_at?new Date(registration.pay_later_due_at).toLocaleString('en-PH',{dateStyle:'long',timeStyle:'short',timeZone:'Asia/Manila'}):'within 3 days'}. This QR is not an entrance pass until payment is approved.`})
-      if(pass.checked_in_at)return response({valid:false,checkedIn:true,checkedInAt:pass.checked_in_at,passId:pass.id,member,event})
+      if(pass.checked_in_at)return response({valid:false,checkedIn:true,payLater:pass.pay_later,checkedInAt:pass.checked_in_at,passId:pass.id,member,event})
       const checkedInAt=new Date().toISOString()
       const {data,error}=await admin.from('passes').update({checked_in_at:checkedInAt,checked_in_by:user.id}).eq('id',pass.id).is('checked_in_at',null).select().maybeSingle()
       if(error||!data){
-        const {data:current}=await admin.from('passes').select('checked_in_at,registrations(profiles(full_name),events(name))').eq('id',pass.id).maybeSingle()
+        const {data:current}=await admin.from('passes').select('checked_in_at,pay_later,registrations(profiles(full_name),events(name))').eq('id',pass.id).maybeSingle()
         const currentRegistration=first(current?.registrations)
-        return response({valid:false,checkedIn:true,checkedInAt:current?.checked_in_at||null,passId:pass.id,member:first(currentRegistration?.profiles)?.full_name||member,event:first(currentRegistration?.events)?.name||event})
+        return response({valid:false,checkedIn:true,payLater:current?.pay_later??pass.pay_later,checkedInAt:current?.checked_in_at||null,passId:pass.id,member:first(currentRegistration?.profiles)?.full_name||member,event:first(currentRegistration?.events)?.name||event})
       }
-      return response({valid:true,passId:pass.id,member,event,checkedInAt})
+      return response({valid:true,payLater:pass.pay_later,passId:pass.id,member,event,checkedInAt})
     }
 
     if(action==='receipts.url'){
@@ -435,7 +436,7 @@ Deno.serve(async(req)=>{
     return response({error:'Unknown Edge Function action.'},404)
   }catch(error){
     console.error('jpcs-api error:',error.message)
-    return response({error:error.message||'Unexpected server error.'},500)
+    return response({error:'Unexpected server error.'},500)
   }
 })
 
@@ -447,7 +448,7 @@ async function dispatchOutbox(admin:any,origin:string,limit=10,dedupeKey?:string
   const {data:messages,error}=await pendingQuery
   if(error)throw error
   let sent=0
-  const failures:{id:string,error:string}[]=[]
+  let failed=0
   for(const msg of messages||[]){
     const now=new Date().toISOString()
     let {data:claimed}=await admin.from('email_outbox').update({claimed_at:now}).eq('id',msg.id).is('sent_at',null).is('claimed_at',null).select().maybeSingle()
@@ -509,11 +510,11 @@ ${final?(p.include_pass_qr===false?`<div style="margin-top:18px;padding:14px 16p
       sent++
     }catch(error){
       await admin.from('email_outbox').update({claimed_at:null}).eq('id',msg.id)
-      failures.push({id:msg.id,error:error.message})
+      failed++
       console.error('Email delivery failed:',msg.id,error.message)
     }
   }
-  return {sent,failures,configured:true,provider:'brevo'}
+  return {sent,failed,configured:true,provider:'brevo'}
 }
 
 function toBase64(bytes:Uint8Array){let binary='';for(let i=0;i<bytes.length;i+=0x8000)binary+=String.fromCharCode(...bytes.subarray(i,i+0x8000));return btoa(binary)}

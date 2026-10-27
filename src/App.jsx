@@ -125,7 +125,6 @@ const friendlyError = (error, context = 'request') => {
   if (message && !/postgres|supabase|sql|exception|error:|internal|stack|deno|runtime/i.test(message) && message.length < 150) {
     return message
   }
-  if (import.meta.env.DEV) console.error('[JPCS]', context, message)
   const fallback = {
     load: "We couldn't load the latest JPCS data. Please try again.",
     payment: "Your payment submission could not be completed. Please try again.",
@@ -170,7 +169,7 @@ const api = async (path, options = {}, context = 'request') => {
 
   const { data: { session }, error: sessionError } = await supabase.auth.getSession()
   if (sessionError || !session?.access_token) throw new Error(friendlyError(sessionError || new Error('session missing'), 'auth'))
-  const { data, error } = await supabase.functions.invoke('jpcs-api', { body: { action, params, input: requestBody, sessionAccessToken: session.access_token }, headers: { Authorization: `Bearer ${session.access_token}` } })
+  const { data, error } = await supabase.functions.invoke('jpcs-api', { body: { action, params, input: requestBody }, headers: { Authorization: `Bearer ${session.access_token}` } })
   if (error) {
     let message = error.message
     try { const detail = await error.context?.json(); message = detail?.error || message } catch {}
@@ -206,13 +205,20 @@ function PanelTitle({ eyebrow, title, action }) {
 function Stat({ icon, label, value, color }) {
   return <div className="stat-card"><div className="stat-top"><div className={`stat-icon ${color}`}>{icon}</div></div><span className="stat-label">{label}</span><strong>{value}</strong></div>
 }
+let activeModalCount = 0
+let bodyOverflowBeforeModal = ''
 function Modal({ children, onClose, onEscape, className = '', labelledBy, contentHidden = false }) {
   useEffect(() => {
     const onKey = e => { if (e.key === 'Escape') (onEscape || onClose)() }
     document.addEventListener('keydown', onKey)
-    const prev = document.body.style.overflow
+    if (activeModalCount === 0) bodyOverflowBeforeModal = document.body.style.overflow
+    activeModalCount += 1
     document.body.style.overflow = 'hidden'
-    return () => { document.removeEventListener('keydown', onKey); document.body.style.overflow = prev }
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      activeModalCount = Math.max(0, activeModalCount - 1)
+      if (activeModalCount === 0) document.body.style.overflow = bodyOverflowBeforeModal
+    }
   }, [onClose, onEscape])
   return <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}><div className={`modal ${className}`} role="dialog" aria-modal="true" aria-labelledby={labelledBy} aria-hidden={contentHidden || undefined}>{children}</div></div>
 }
@@ -350,7 +356,7 @@ function PassCard({ pass }) {
     api(`/api/passes/${pass.id}/qr`, {}, 'receipt').then(d => { if (alive) setQr(d.dataUrl) }).catch(e => { if (alive) setErr(e.message) })
     return () => { alive = false }
   }, [pass.id])
-  return <div className="pass-card"><div className="pass-top"><div className="pass-symbol"><Ticket size={19} /></div><span className="pass-label">VERIFIED PASS</span></div><div className="pass-event"><div><b>{pass.event?.name}</b><span>{date(pass.event?.event_date)}</span></div></div>{qr ? <img className="actual-qr" src={qr} alt="Event entrance QR code" /> : <span className="small-muted">{err || 'Loading secure pass…'}</span>}<small className="pass-token">Pass ID {(pass.token || '').slice(0, 8)}••••</small><p className="pass-hint">{pass.checked_in_at ? 'Checked in' : 'Present this QR code at the event entrance.'}</p></div>
+  return <div className="pass-card"><div className="pass-top"><div className="pass-symbol"><Ticket size={19} /></div><span className="pass-label">VERIFIED PASS</span></div><div className="pass-event"><div><b>{pass.event?.name}</b><span>{date(pass.event?.event_date)}</span></div></div>{qr ? <img className="actual-qr" src={qr} alt="Event entrance QR code" /> : <span className="small-muted">{err || 'Loading secure pass?'}</span>}<small className="pass-token">Pass ID {(pass.token || '').slice(0, 8)}••••</small><p className="pass-hint">{pass.checked_in_at ? 'Checked in' : 'Present this QR code at the event entrance.'}</p></div>
 }
 
 function ProfileModal({ profile, onClose, onSaved, notify, setError }) {
@@ -417,7 +423,7 @@ const [role, setRole] = useState('member')
       notify('Member account created.')
       onCreated()
       onClose()
-    } catch (ex) { console.error('Add member failed:', ex); setErr(ex?.message || ex?.error || (typeof ex === 'string' ? ex : 'Something went wrong. Please try again later.')) } finally { setBusy(false) }
+    } catch (ex) { setErr(ex?.message || ex?.error || (typeof ex === 'string' ? ex : 'Something went wrong. Please try again later.')) } finally { setBusy(false) }
   }
   return <Modal onClose={onClose} className="profile-modal add-member-modal">
     <div className="modal-heading"><div><p className="eyebrow">ADMIN</p><h2>Add member</h2></div><ModalClose onClick={onClose} /></div>
@@ -496,6 +502,7 @@ function MemberImportModal({ onClose, onImported, members }) {
   const [file, setFile] = useState(null)
   const [fingerprint, setFingerprint] = useState('')
   const [records, setRecords] = useState([])
+  const [reviewFilter, setReviewFilter] = useState('all')
   const [warnings, setWarnings] = useState([])
   const [extractedText, setExtractedText] = useState('')
   const [expectedCountHint, setExpectedCountHint] = useState(null)
@@ -616,11 +623,12 @@ function MemberImportModal({ onClose, onImported, members }) {
     ['middleInitial', 'Middle Initial'], ['program', 'Program'], ['yearLevel', 'Year Level'], ['sex', 'Sex'],
     ['email', 'Email'], ['contactNumber', 'Contact Number'], ['address', 'Address']
   ]
-  const previewTable = <div ref={previewTableRef} className="member-import-table-wrap" role="region" aria-label="Member preview table" tabIndex={0} onScroll={event => { previewScrollPosition.current = { top: event.currentTarget.scrollTop, left: event.currentTarget.scrollLeft } }}><table className="member-import-table"><thead><tr><th>Include</th>{fields.map(([, label]) => <th key={label}>{label}</th>)}<th>Review</th></tr></thead><tbody>{reviewed.map((record, index) => <tr key={`${record.directoryRow}-${index}`} className={`import-row-${record.status}`}>
+  const visibleReviewed = reviewed.map((record,index)=>({...record,recordIndex:index})).filter(record=>reviewFilter==='all'||record.status===reviewFilter)
+  const previewTable = <><div className="member-import-filter"><label>Filter records <select value={reviewFilter} onChange={event=>setReviewFilter(event.target.value)}><option value="all">All statuses</option><option value="valid">Valid</option><option value="incomplete">Incomplete</option><option value="duplicate">Duplicate</option></select></label></div><div ref={previewTableRef} className="member-import-table-wrap" role="region" aria-label="Member preview table" tabIndex={0} onScroll={event => { previewScrollPosition.current = { top: event.currentTarget.scrollTop, left: event.currentTarget.scrollLeft } }}><table className="member-import-table"><thead><tr><th>Include</th>{fields.map(([, label]) => <th key={label}>{label}</th>)}<th>Review</th></tr></thead><tbody>{visibleReviewed.map(({recordIndex:index,...record}) => <tr key={`${record.directoryRow}-${index}`} className={`import-row-${record.status}`}>
     <td data-label="Include"><input type="checkbox" checked={!record.excluded} aria-label={`Include directory record ${record.directoryRow ?? index + 1}`} onChange={event => updateRecord(index, 'excluded', !event.target.checked)} /></td>
     {fields.map(([key, label]) => <td key={key} data-label={label}><input aria-label={`${label}, directory row ${record.directoryRow ?? index + 1}`} value={record[key] ?? ''} onChange={event => updateRecord(index, key, event.target.value)} disabled={busy || record.excluded} /></td>)}
     <td data-label="Review"><span className={`import-status ${record.status}`}>{record.status}</span>{record.requiredIssues.map(issue => <small key={issue}>{issue}</small>)}{record.duplicate && <small>Matches another directory row or existing member.</small>}{record.optionalIssues.map(issue => <small className="optional-import-warning" key={issue}>{issue}</small>)}</td>
-  </tr>)}</tbody></table></div>
+  </tr>)}</tbody></table></div></>
 
   return <><Modal onClose={close} onEscape={handleEscape} contentHidden={expanded} className="member-import-modal" labelledBy="member-import-title">
     <div className="modal-heading"><div><p className="eyebrow">ADMIN · MEMBER DIRECTORY</p><h2 id="member-import-title">Import Members</h2></div><div className="member-import-heading-actions"><button ref={expandPreviewRef} type="button" className="member-import-expand" aria-label="Expand member preview table" disabled={!reviewed.length || Boolean(summary)} onClick={() => setExpanded(true)}><Maximize2 size={16} />Expand Table</button><ModalClose onClick={close} /></div></div>
@@ -882,7 +890,7 @@ function EventModal({ event, onClose, onSaved, notify, setError, requestConfirm 
     if (!event?.id) return
     requestConfirm({
       title: 'Delete event?',
-      message: `Delete “${event.name}”? Events with registrations or payment history cannot be deleted.`,
+      message: `Delete “${event.name}”? Events with registration records cannot be deleted. Deleting a payment does not remove its registration.`,
       confirmText: 'Delete event',
       destructive: true,
       onConfirm: async () => {
@@ -956,7 +964,7 @@ export default function App() {
   const [filterYear, setFilterYear] = useState('all')
   const [viewMode, setViewMode] = useState(() => safeGet('jpcs-workspace') || 'admin')
   const [profileMenu, setProfileMenu] = useState(false)
-const [moreOpen, setMoreOpen] = useState(false)
+  const [moreOpen, setMoreOpen] = useState(false)
   const [dataLoading, setDataLoading] = useState(false)
   const menuRef = useRef(null)
   const toastTimer = useRef(null)
@@ -996,13 +1004,21 @@ const [moreOpen, setMoreOpen] = useState(false)
     if (!profile || profile.must_change_password) return
     setDataLoading(true); setError('')
     try {
-      const e = await supabase.from('events').select('*').order('event_date', { ascending: true, nullsFirst: false })
-      if (e.error) throw e.error; setEvents(e.data || [])
-      const r = await supabase.from('registrations').select('id,member_id,event_id,price,created_at,pay_later_started_at,pay_later_due_at,events(*),profiles(full_name,email),payments(*),passes(*)').order('created_at', { ascending: false })
-      if (r.error) throw r.error; setRegistrations(r.data || [])
-      if (profile.role !== 'member') {
-        const [p, m] = await Promise.all([supabase.from('payments').select('*,registrations(id,member_id,event_id,profiles(full_name,email,student_number,year_level),events(name,price,event_date))').order('submitted_at', { ascending: false }), supabase.from('profiles').select('*').order('full_name')])
-        if (p.error) throw p.error; if (m.error) throw m.error; setPayments(p.data || []); setMembers(m.data || [])
+      const eventRequest = supabase.from('events').select('*').order('event_date', { ascending: true, nullsFirst: false })
+      const registrationRequest = supabase.from('registrations').select('id,member_id,event_id,price,created_at,pay_later_started_at,pay_later_due_at,events(*),profiles(full_name,email),payments(*),passes(*)').order('created_at', { ascending: false })
+      const adminRequests = profile.role !== 'member' ? Promise.all([
+        supabase.from('payments').select('*,registrations(id,member_id,event_id,profiles(full_name,email,student_number,year_level),events(name,price,event_date))').order('submitted_at', { ascending: false }),
+        supabase.from('profiles').select('*').order('full_name')
+      ]) : Promise.resolve(null)
+      const [e, r, adminData] = await Promise.all([eventRequest, registrationRequest, adminRequests])
+      if (e.error) throw e.error
+      if (r.error) throw r.error
+      if (adminData && (adminData[0].error || adminData[1].error)) throw adminData[0].error || adminData[1].error
+      setEvents(e.data || [])
+      setRegistrations(r.data || [])
+      if (adminData) {
+        setPayments(adminData[0].data || [])
+        setMembers(adminData[1].data || [])
       } else {
         setPayments((r.data || []).flatMap(x => (x.payments || []).map(p => ({ ...p, registration: x, event: x.events }))))
         setMembers([])
@@ -1032,7 +1048,7 @@ const [moreOpen, setMoreOpen] = useState(false)
   const openPayment = event => { setError(''); navigate('Events'); setModal({ type: 'payment', event }) }
   const onPaymentSubmitted = info => { setModal({ type: 'paymentSubmitted', ...info }); setRefresh(v => v + 1) }
   const handleReview = async (payment, decision, remarks) => { await api(`/api/payments/${payment.id}/review`, { method: 'POST', body: JSON.stringify({ decision, remarks }) }, 'review'); setRefresh(v => v + 1); const sent = decision === 'approved'; if (decision === 'approved') notify('Payment approved. Confirmation email status is noted in your workspace.'); else notify('Payment rejected. The member can see the reason provided.') }
-  const handleDeletePayment = async payment => { await api('/api/payments/delete', { method: 'POST', body: JSON.stringify({ paymentId: payment.id }) }, 'request'); setRefresh(v => v + 1); notify('Payment deleted. The action was added to the audit log.') }
+  const handleDeletePayment = async payment => { const result = await api('/api/payments/delete', { method: 'POST', body: JSON.stringify({ paymentId: payment.id }) }, 'request'); setRefresh(v => v + 1); notify(result.registrationDeleted ? 'Payment and its last-payment registration deleted. The action was added to the audit log.' : 'Payment deleted. Other payments or an active Pay Later obligation remain; the action was added to the audit log.') }
   const handleDeletePayLater = async registration => {
     requestConfirm({
       title: 'Delete Pay Later obligation?',
@@ -1040,8 +1056,8 @@ const [moreOpen, setMoreOpen] = useState(false)
       confirmText: 'Delete obligation',
       destructive: true,
       onConfirm: async () => {
-        await api('/api/pay-later/delete', { method: 'POST', body: JSON.stringify({ registrationId: registration.id }) }, 'request')
-        setRefresh(v => v + 1); notify('Pay Later obligation deleted. The action was added to the audit log.')
+        const result = await api('/api/pay-later/delete', { method: 'POST', body: JSON.stringify({ registrationId: registration.id }) }, 'request')
+        setRefresh(v => v + 1); notify(result.registrationDeleted ? 'Pay Later obligation and its unpaid registration deleted. The action was added to the audit log.' : 'Pay Later obligation deleted. The registration and payment history were kept; the action was added to the audit log.')
       }
     })
   }
