@@ -416,3 +416,4 @@ html:has(.login-screen),body:has(.login-screen),#root:has(.login-screen){width:1
 .password-modal form>label{margin-top:4px}
 .password-modal .modal-input{width:100%;box-sizing:border-box}
 @media(max-width:600px){.settings-actions{grid-column:1/-1;justify-content:stretch}.settings-actions .outline-btn{flex:1 1 150px}.settings-card:has(.settings-actions){grid-template-columns:1fr}}
+@media(max-width:800px){.login-screen{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}.login-story{display:none}.login-panel{min-height:100%;box-sizing:border-box}}
