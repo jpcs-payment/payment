@@ -56,6 +56,11 @@ const safeSet = (k, v) => { try { localStorage.setItem(k, v) } catch {} }
 const sessionGet = k => { try { return sessionStorage.getItem(k) } catch { return null } }
 const sessionSet = (k, v) => { try { sessionStorage.setItem(k, v) } catch {} }
 const sessionRemove = k => { try { sessionStorage.removeItem(k) } catch {} }
+const SESSION_EXPIRED_EVENT = 'jpcs:session-expired'
+const isSessionExpiredError = error => /jwt.*expired|token has expired|refresh token|invalid session|session.*(?:expired|no longer available|missing)|not authenticated|auth session missing/i.test(String(error?.message || error || ''))
+const notifySessionExpired = error => {
+  if (isSessionExpiredError(error) && typeof window !== 'undefined') window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
+}
 
 const METHOD_META = {
   gcash: { label: 'GCash', description: 'Scan the official GCash QR and upload your receipt.', icon: Wallet, qr: '/images/gcash-qr.png' },
@@ -73,7 +78,7 @@ const friendlyError = (error, context = 'request') => {
   if (/invalid login credentials|invalid_grant|email not confirmed|invalid email or password/i.test(message)) {
     return "We couldn't sign you in. Check your email and password and try again."
   }
-  if (/jwt|token has expired|refresh token|invalid session|session.*expired|not authenticated|auth session missing/i.test(message)) {
+  if (/jwt|token has expired|refresh token|invalid session|session.*(?:expired|no longer available|missing)|not authenticated|auth session missing/i.test(message)) {
     return 'Your session has expired. Please sign in again.'
   }
   if (/row-level security|permission denied|not authorized|officer access required|403|insufficient privilege/i.test(message)) {
@@ -170,13 +175,21 @@ const api = async (path, options = {}, context = 'request') => {
   else if (path.startsWith('/api/passes/') && path.endsWith('/qr')) { action = 'passes.qr'; params.passId = segments.at(-2) }
   else throw new Error('Something went wrong. Please try again later.')
 
-  const { data, error } = await invokeWithSessionRefresh(supabase.auth, session => supabase.functions.invoke('jpcs-api', { body: { action, params, input: requestBody }, headers: { Authorization: `Bearer ${session.access_token}` } }))
+  let response
+  try {
+    response = await invokeWithSessionRefresh(supabase.auth, session => supabase.functions.invoke('jpcs-api', { body: { action, params, input: requestBody }, headers: { Authorization: `Bearer ${session.access_token}` } }))
+  } catch (error) {
+    notifySessionExpired(error)
+    throw new Error(friendlyError(error, context))
+  }
+  const { data, error } = response
   if (error) {
     let message = error.message
     try { const detail = await error.context?.json(); message = detail?.error || message } catch {}
+    if (error.status === 401 || error.context?.status === 401) notifySessionExpired(message)
     throw new Error(friendlyError(message, context))
   }
-  if (data?.error) throw new Error(friendlyError(data.error, context))
+  if (data?.error) { notifySessionExpired(data.error); throw new Error(friendlyError(data.error, context)) }
   return data
 }
 
@@ -996,6 +1009,7 @@ export default function App() {
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [sessionExpiredNotice, setSessionExpiredNotice] = useState('')
   const [toast, setToast] = useState('')
   const [modal, setModal] = useState(null)
   const [confirmDialog, setConfirmDialog] = useState(null)
@@ -1015,6 +1029,8 @@ export default function App() {
   const [dataLoading, setDataLoading] = useState(false)
   const menuRef = useRef(null)
   const toastTimer = useRef(null)
+  const sessionRef = useRef(null)
+  const intentionalSignOutRef = useRef(false)
   const notify = useCallback(msg => { setToast(msg); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 4000) }, [])
   const requestConfirm = useCallback(options => setConfirmDialog(options), [])
   useEffect(() => () => clearTimeout(toastTimer.current), [])
@@ -1024,12 +1040,41 @@ export default function App() {
 
   useEffect(() => {
     if (!supabase) { setAuthReady(true); return }
-    supabase.auth.getSession().then(({ data, error }) => { if (error) setError(friendlyError(error, 'auth')); setSession(data.session ?? null); setAuthReady(true) })
+    supabase.auth.getSession().then(({ data, error }) => { if (error) { notifySessionExpired(error); setError(friendlyError(error, 'auth')) }; sessionRef.current = data.session ?? null; setSession(data.session ?? null); setAuthReady(true) })
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, next) => {
-      if (event === 'SIGNED_OUT') { setSession(null); setProfile(null); setProfileState('idle'); setPage('Overview'); setModal(null) }
-      else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED' || event === 'INITIAL_SESSION') setSession(next ?? null)
+      if (event === 'SIGNED_OUT') {
+        const hadSession = Boolean(sessionRef.current)
+        sessionRef.current = null
+        if (hadSession && !intentionalSignOutRef.current) notifySessionExpired(new Error('Session expired'))
+        setSession(null); setProfile(null); setProfileState('idle'); setPage('Overview'); setModal(null)
+      }
+      else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED' || event === 'INITIAL_SESSION') { sessionRef.current = next ?? null; setSession(next ?? null) }
     })
     return () => subscription.unsubscribe()
+  }, [])
+
+  useEffect(() => {
+    const onExpiredSession = () => {
+      setSessionExpiredNotice('Your session has expired. Please sign in again.')
+      setError('')
+      setToast('')
+      setModal(null)
+      setProfileMenu(false)
+      setMobile(false)
+      sessionRemove('jpcs-page')
+      void (async () => {
+        intentionalSignOutRef.current = true
+        try { await supabase?.auth.signOut({ scope: 'local' }) } catch {}
+        intentionalSignOutRef.current = false
+        sessionRef.current = null
+        setSession(null)
+        setProfile(null)
+        setProfileState('idle')
+        setPage('Overview')
+      })()
+    }
+    window.addEventListener(SESSION_EXPIRED_EVENT, onExpiredSession)
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpiredSession)
   }, [])
 
   useEffect(() => {
@@ -1039,11 +1084,11 @@ export default function App() {
     setProfileState('loading'); setProfileError('')
     supabase.from('profiles').select('*').eq('id', userId).maybeSingle().then(({ data, error }) => {
       if (!alive) return
-      if (error) { setProfileState('error'); setProfileError(friendlyError(error, 'profile')); return }
+      if (error) { notifySessionExpired(error); setProfileState('error'); setProfileError(friendlyError(error, 'profile')); return }
       if (!data) { setProfileState('missing'); setProfileError("We couldn't find a JPCS profile for this account. Contact a JPCS officer to provision it, then retry."); return }
       setProfile(data); setProfileState('ready')
       if (data.role !== 'member' && !safeGet('jpcs-workspace')) { setViewMode('admin'); safeSet('jpcs-workspace', 'admin') }
-    }).catch(err => { if (alive) { setProfileState('error'); setProfileError(friendlyError(err, 'profile')) } })
+    }).catch(err => { if (alive) { notifySessionExpired(err); setProfileState('error'); setProfileError(friendlyError(err, 'profile')) } })
     return () => { alive = false }
   }, [authReady, userId, profileRetry])
 
@@ -1086,7 +1131,7 @@ export default function App() {
         setMembers([])
       }
       setPasses(registrationRows.flatMap(x => asArray(x.passes).map(p => ({ ...p, registration: x, event: x.events }))))
-    } catch (ex) { setError(friendlyError(ex, 'load')) } finally { setDataLoading(false) }
+    } catch (ex) { notifySessionExpired(ex); setError(friendlyError(ex, 'load')) } finally { setDataLoading(false) }
   }, [profile, refresh])
   useEffect(() => { load() }, [load])
 
@@ -1100,7 +1145,7 @@ export default function App() {
   }, [])
 
   const navigate = useCallback(name => { setPage(name); setMobile(false); setProfileMenu(false); window.scrollTo({ top: 0, behavior: 'auto' }) }, [])
-  const signOut = async () => { setProfileMenu(false); setMobile(false); try { await supabase?.auth.signOut() } catch {} setSession(null); setProfile(null); setProfileState('idle'); setPage('Overview'); setModal(null); setError(''); setToast(''); sessionRemove('jpcs-page') }
+  const signOut = async () => { setProfileMenu(false); setMobile(false); intentionalSignOutRef.current = true; try { await supabase?.auth.signOut() } catch {} intentionalSignOutRef.current = false; sessionRef.current = null; setSession(null); setProfile(null); setProfileState('idle'); setPage('Overview'); setModal(null); setError(''); setSessionExpiredNotice(''); setToast(''); sessionRemove('jpcs-page') }
   const changePassword = async e => {
     e.preventDefault(); const d = new FormData(e.currentTarget); const password = d.get('password')
     if (password !== d.get('confirm')) { setError('Passwords do not match.'); return }
@@ -1171,7 +1216,7 @@ export default function App() {
   if (!supabase) return <AuthFrame dark={dark}><img className="login-logo" src="/images/jpcs-logo.png" alt="JPCS logo" /><p className="eyebrow">CONFIGURATION NEEDED</p><h1>Connect Supabase</h1><p className="muted">Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY, then restart the app.</p></AuthFrame>
   if (!authReady) return <WorkspaceSkeleton dark={dark} />
   if (!session) {
-    return <AuthFrame dark={dark}><img className="login-logo" src="/images/jpcs-logo.png" alt="JPCS logo" /><p className="eyebrow">WELCOME BACK</p><h1>Pick up where you left off.</h1><p className="muted">Sign in to access your JPCS events and payment activity.</p>{error && <ErrorBox text={error} onClose={() => setError('')} />}<form onSubmit={async e => { e.preventDefault(); setBusy(true); setError(''); const d = new FormData(e.currentTarget); const { error: err } = await supabase.auth.signInWithPassword({ email: d.get('email'), password: d.get('password') }); if (err) setError(friendlyError(err, 'auth')); setBusy(false) }}><label htmlFor="si-email">Email address</label><input id="si-email" name="email" type="email" autoComplete="username" required /><label htmlFor="si-pass">Password</label><input id="si-pass" name="password" type="password" autoComplete="current-password" required /><button disabled={busy} className="primary full">{busy ? 'Signing in…' : 'Sign in'} <ArrowRight size={17} /></button></form><p className="login-card-footnote"><span className="login-footnote-desktop">Secure access for JPCS members and officers.</span><span className="login-footnote-mobile">Web Software Engineer • Carl Andrei Lucido<br />Web QA Engineer • Aerol Justine • Ms. Joyce</span></p></AuthFrame>
+    return <AuthFrame dark={dark}><img className="login-logo" src="/images/jpcs-logo.png" alt="JPCS logo" /><p className="eyebrow">WELCOME BACK</p><h1>Pick up where you left off.</h1><p className="muted">Sign in to access your JPCS events and payment activity.</p>{(sessionExpiredNotice || error) && <ErrorBox text={sessionExpiredNotice || error} onClose={() => { setError(''); setSessionExpiredNotice('') }} />}<form onSubmit={async e => { e.preventDefault(); setBusy(true); setError(''); setSessionExpiredNotice(''); const d = new FormData(e.currentTarget); const { error: err } = await supabase.auth.signInWithPassword({ email: d.get('email'), password: d.get('password') }); if (err) setError(friendlyError(err, 'auth')); setBusy(false) }}><label htmlFor="si-email">Email address</label><input id="si-email" name="email" type="email" autoComplete="username" required /><label htmlFor="si-pass">Password</label><input id="si-pass" name="password" type="password" autoComplete="current-password" required /><button disabled={busy} className="primary full">{busy ? 'Signing in…' : 'Sign in'} <ArrowRight size={17} /></button></form><p className="login-card-footnote"><span className="login-footnote-desktop">Secure access for JPCS members and officers.</span><span className="login-footnote-mobile">Web Software Engineer • Carl Andrei Lucido<br />Web QA Engineer • Aerol Justine • Ms. Joyce</span></p></AuthFrame>
   }
   if (profileState === 'loading' || profileState === 'idle') return <WorkspaceSkeleton dark={dark} />
   if (profileState === 'error' || profileState === 'missing') {
