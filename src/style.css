@@ -450,6 +450,7 @@ html:has(.login-screen),body:has(.login-screen),#root:has(.login-screen){width:1
   .attendance-history .table-wrap{max-height:none;overflow:visible}
   .attendance-history table{width:100%;min-width:0}
   .attendance-history .table-wrap:not(.member-import-table-wrap)>table tbody tr>td:nth-child(2),.attendance-history .table-wrap:not(.member-import-table-wrap)>table tbody tr>td:nth-child(3){grid-column:auto;align-content:center}
+  .my-pay-later-section .table-wrap:not(.member-import-table-wrap)>table tbody tr>td:nth-child(4),.my-pay-later-section .table-wrap:not(.member-import-table-wrap)>table tbody tr>td:nth-child(5){grid-column:auto;align-content:center}
   .table-wrap:has(td[data-label="Year level"])>table tbody td[data-label="Email"]{display:none}
   .table-wrap:has(td[data-label="Year level"])>table tbody td:first-child small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;overflow-wrap:normal}
   .payment-table-wrap>table tbody tr{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
