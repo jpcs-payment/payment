@@ -222,10 +222,6 @@ export default function CheckInScanner({events,passes,api,onCheckedIn}){
       <div className="scanner-stat"><b>{payLaterCount}</b><span>Pay Later</span></div>
       <div className="scanner-stat"><b>{Math.max(0,entrancePasses.length-checkedCount)}</b><span>Remaining entry passes</span></div>
     </div>
-    <section className="attendance-history" aria-labelledby="attendance-history-title">
-      <div className="attendance-history-heading"><div><p className="eyebrow">EVENT RECORD</p><h3 id="attendance-history-title">Attendance history</h3></div><span>{attendance.length}</span></div>
-      {attendance.length ? <div className="table-wrap"><table><thead><tr><th>Member</th><th>Checked in</th></tr></thead><tbody>{attendance.map(pass=><tr key={pass.id}><td data-label="Member"><b>{pass.registration?.profiles?.full_name||'Member'}</b><small className="method">{pass.registration?.profiles?.email||''}</small></td><td data-label="Checked in">{formatDateTime(pass.checked_in_at)}</td></tr>)}</tbody></table></div> : <p className="muted attendance-empty">No one has checked in for this event yet.</p>}
-    </section>
     <div className="scanner-grid">
       <div className="scanner-main">
         <div className={`scanner-camera ${scanning ? 'live' : 'off'}`}>
@@ -243,5 +239,9 @@ export default function CheckInScanner({events,passes,api,onCheckedIn}){
         <p className="scanner-help">{selectedEvent?`Checking passes for ${selectedEvent.name}. `:''}The scanner pauses briefly after each result, then resumes automatically. Duplicate and wrong-event passes are rejected.</p>
       </div>
     </div>
+    <section className="attendance-history" aria-labelledby="attendance-history-title">
+      <div className="attendance-history-heading"><div><p className="eyebrow">EVENT RECORD</p><h3 id="attendance-history-title">Attendance history</h3></div><span>{attendance.length}</span></div>
+      {attendance.length ? <div className="table-wrap"><table><thead><tr><th>Member</th><th>Checked in</th></tr></thead><tbody>{attendance.map(pass=><tr key={pass.id}><td data-label="Member"><b>{pass.registration?.profiles?.full_name||'Member'}</b><small className="method">{pass.registration?.profiles?.email||''}</small></td><td data-label="Checked in">{formatDateTime(pass.checked_in_at)}</td></tr>)}</tbody></table></div> : <p className="muted attendance-empty">No one has checked in for this event yet.</p>}
+    </section>
   </div>
 }
