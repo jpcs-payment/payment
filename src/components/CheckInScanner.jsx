@@ -205,12 +205,8 @@ export default function CheckInScanner({events,passes,api,onCheckedIn}){
   }
 
   return <div className="checkin-scanner">
-    <div className="scanner-header">
-      <h2>Check-in Scanner</h2>
-      <p className="muted">Scan entrance passes or enter a pass token manually.</p>
-    </div>
     <div className="scanner-toolbar">
-      <label className="scanner-event"><span>Checking into</span><select value={eventId} onChange={event=>{setEventId(event.target.value);eventRef.current=event.target.value;setResult(null)}} disabled={scanning||starting}>{!sortedEvents.length&&<option value="">No events available</option>}{sortedEvents.map(event=><option key={event.id} value={event.id}>{event.name}{event.event_date?` · ${new Date(event.event_date).toLocaleDateString('en-PH',{month:'short',day:'numeric'})}`:''}{event.active?'':' (inactive)'}</option>)}</select></label>
+      <label className="scanner-event"><span>Choose Event</span><select value={eventId} onChange={event=>{setEventId(event.target.value);eventRef.current=event.target.value;setResult(null)}} disabled={scanning||starting}>{!sortedEvents.length&&<option value="">No events available</option>}{sortedEvents.map(event=><option key={event.id} value={event.id}>{event.name}{event.event_date?` · ${new Date(event.event_date).toLocaleDateString('en-PH',{month:'short',day:'numeric'})}`:''}{event.active?'':' (inactive)'}</option>)}</select></label>
       <div className="scanner-actions">
         {scanning?<button className="outline-btn" onClick={stopScanner}>Stop camera</button>:<button className="primary" onClick={startScanner} disabled={starting||!eventId||!liveCameraAvailable} title={!liveCameraAvailable?'Live camera requires HTTPS':undefined}>{starting?'Starting camera…':<>Start camera <Camera size={16}/></>}</button>}
         <label className="outline-btn scanner-photo"><Camera size={15}/> Take photo<input type="file" accept="image/*" capture="environment" onChange={handlePhoto} hidden/></label>
@@ -238,7 +234,7 @@ export default function CheckInScanner({events,passes,api,onCheckedIn}){
           <label><Keyboard size={15}/> Manual pass entry</label>
           <div className="manual-row"><input value={manual} onChange={event=>setManual(event.target.value)} placeholder="Pass token or QR link" disabled={scanning}/><button className="outline-btn" disabled={!manual.trim()||scanning}>Check in</button></div>
         </form>
-        <p className="scanner-help">{selectedEvent?`Checking passes for ${selectedEvent.name}. `:''}The scanner pauses briefly after each result, then resumes automatically. Duplicate and wrong-event passes are rejected.</p>
+        {selectedEvent&&<p className="scanner-help">Checking passes for {selectedEvent.name}.</p>}
       </div>
     </div>
     <section className="attendance-history" aria-labelledby="attendance-history-title">
