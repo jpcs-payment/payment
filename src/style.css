@@ -410,6 +410,61 @@ html:has(.login-screen),body:has(.login-screen),#root:has(.login-screen){width:1
 @media(max-width:900px){.member-import-body{gap:8px}.member-import-dropzone{padding:.75rem}.member-import-password-notice{padding:.5rem .65rem}.member-import-note{margin:0;font-size:.74rem}}
 @media(max-width:650px){.member-action-buttons{width:100%}.member-action-buttons button{flex:1;justify-content:center}.member-import-counts{grid-template-columns:repeat(3,minmax(0,1fr))}.member-import-modal{width:100%;max-height:calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 12px);padding:10px;border-radius:16px}.member-import-modal>.modal-heading h2{font-size:1.15rem}.member-import-body>.muted{font-size:.74rem;line-height:1.35}.member-import-dropzone{padding:.5rem;font-size:.78rem}.member-import-table-wrap{height:38dvh;min-height:160px;max-height:42dvh}.member-import-fullscreen{inset:max(8px,env(safe-area-inset-top)) max(8px,env(safe-area-inset-right)) max(8px,env(safe-area-inset-bottom)) max(8px,env(safe-area-inset-left));gap:8px;padding:8px;border-radius:10px}.member-import-row-check{padding:.4rem .5rem;font-size:.72rem}.member-import-row-check .text-button{margin-left:0}.member-import-password-notice small{font-size:.68rem}.member-import-footer{padding-top:8px}.member-import-expand{min-height:34px;padding:6px 8px;font-size:.72rem}}
 .app-shell.dark .nav-badge,.app-shell.dark .bottom-badge,.app-shell.dark .member-count-badge,.app-shell.dark .pay-later-admin-heading>span,.app-shell.dark .attendance-history-heading>span{background:#fff!important;color:#101e42!important}
+
+/* Final mobile member-dashboard overrides: preserve the reference layout after
+   the shared event and mobile navigation rules above. */
+@media(max-width:650px){
+  .app-shell:has(.member-dashboard-stats) .dashboard-banner{box-sizing:border-box;display:flex;flex-direction:column;align-items:stretch;justify-content:space-between;gap:12px;height:174px;min-height:174px;margin:0;padding:16px 18px;border-radius:20px}
+  .app-shell:has(.member-dashboard-stats) .dashboard-banner>div:first-child{min-width:0}
+  .app-shell:has(.member-dashboard-stats) .dashboard-banner .eyebrow{display:flex;align-items:center;gap:6px;font-size:.58rem;letter-spacing:.09em;line-height:1.2}
+  .app-shell:has(.member-dashboard-stats) .dashboard-banner .eyebrow svg{flex:none}
+  .app-shell:has(.member-dashboard-stats) .dashboard-banner h1{margin:7px 0;font-size:1.35rem;line-height:1.15;letter-spacing:-.035em}
+  .app-shell:has(.member-dashboard-stats) .dashboard-banner .muted{font-size:.75rem;line-height:1.4}
+  .app-shell:has(.member-dashboard-stats) .dashboard-banner-actions{display:flex;width:100%;justify-content:space-between;align-items:center;gap:8px}
+  .app-shell:has(.member-dashboard-stats) .dashboard-passes-btn{max-width:none;min-height:36px;margin:0;padding:7px 12px;gap:7px;border-radius:999px;font-size:.72rem;white-space:nowrap}
+  .app-shell:has(.member-dashboard-stats) .dashboard-passes-btn svg{width:14px;height:14px}
+  .app-shell:has(.member-dashboard-stats) .dashboard-account-status{padding:6px 9px;font-size:.65rem}
+  .member-dashboard-stats{grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-rows:110px;gap:10px}
+  .member-dashboard-stats .stat-card{box-sizing:border-box;display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-rows:32px 1fr auto;align-items:center;justify-items:stretch;column-gap:6px;row-gap:3px;width:100%;height:110px;min-height:110px;min-width:0;padding:12px 14px;border-radius:16px;text-align:left}
+  .member-dashboard-stats .stat-top{grid-column:1;grid-row:1;align-self:center}
+  .member-dashboard-stats .stat-icon{width:34px;height:34px;border-radius:12px}
+  .member-dashboard-stats .stat-card:before{grid-column:2;grid-row:1;align-self:center;justify-self:end;color:var(--muted);font-size:.58rem;font-weight:700;letter-spacing:.06em;text-align:right}
+  .member-dashboard-stats>.stat-card:nth-child(1):before{content:"PAID"}
+  .member-dashboard-stats>.stat-card:nth-child(2):before{content:"STATUS"}
+  .member-dashboard-stats>.stat-card:nth-child(3):before{content:"EVENTS"}
+  .member-dashboard-stats>.stat-card:nth-child(4):before{content:"ACCESS"}
+  .member-dashboard-stats .stat-label{grid-column:1/-1;grid-row:2;align-self:end;font-size:.72rem;line-height:1.15;overflow-wrap:anywhere}
+  .member-dashboard-stats .stat-card strong{grid-column:1/-1;grid-row:3;align-self:start;font-size:1.15rem;line-height:1.15;letter-spacing:-.03em;white-space:nowrap}
+}
+
+/* Member dashboard mobile layout follows the compact reference-card structure. */
+.dashboard-banner-actions{display:flex;align-items:center;gap:10px}
+.dashboard-account-status{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid currentColor;border-radius:999px;color:inherit;font-size:.72rem;white-space:nowrap}
+.dashboard-account-status i{width:6px;height:6px;border-radius:50%;background:currentColor}
+@media(max-width:650px){
+  .app-shell:has(.member-dashboard-stats) .dashboard-banner{box-sizing:border-box;display:flex;flex-direction:column;align-items:stretch;justify-content:space-between;gap:12px;height:174px;min-height:174px;padding:16px 18px;border-radius:20px}
+  .app-shell:has(.member-dashboard-stats) .dashboard-banner>div:first-child{min-width:0}
+  .app-shell:has(.member-dashboard-stats) .dashboard-banner .eyebrow{display:flex;align-items:center;gap:6px}
+  .app-shell:has(.member-dashboard-stats) .dashboard-banner .eyebrow svg{flex:none}
+  .app-shell:has(.member-dashboard-stats) .dashboard-banner .eyebrow{font-size:.58rem;letter-spacing:.09em;line-height:1.2}
+  .app-shell:has(.member-dashboard-stats) .dashboard-banner h1{margin:7px 0;font-size:1.35rem;line-height:1.15;letter-spacing:-.035em}
+  .app-shell:has(.member-dashboard-stats) .dashboard-banner .muted{font-size:.75rem;line-height:1.4}
+  .app-shell:has(.member-dashboard-stats) .dashboard-banner-actions{width:100%;justify-content:space-between;gap:8px}
+  .app-shell:has(.member-dashboard-stats) .dashboard-passes-btn{max-width:none;min-height:36px;padding:7px 12px;gap:7px;border-radius:999px;font-size:.72rem;white-space:nowrap}
+  .app-shell:has(.member-dashboard-stats) .dashboard-passes-btn svg{width:14px;height:14px}
+  .app-shell:has(.member-dashboard-stats) .dashboard-account-status{padding:6px 9px;font-size:.65rem}
+  .member-dashboard-stats{grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-rows:110px;gap:10px}
+  .member-dashboard-stats .stat-card{box-sizing:border-box;display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-rows:32px 1fr auto;align-items:center;justify-items:stretch;column-gap:6px;row-gap:3px;width:100%;height:110px;min-height:110px;min-width:0;padding:12px 14px;border-radius:16px;text-align:left}
+  .member-dashboard-stats .stat-top{grid-column:1;grid-row:1;align-self:center}
+  .member-dashboard-stats .stat-icon{width:34px;height:34px;border-radius:12px}
+  .member-dashboard-stats .stat-card:before{grid-column:2;grid-row:1;align-self:center;justify-self:end;color:var(--muted);font-size:.58rem;font-weight:700;letter-spacing:.06em;text-align:right}
+  .member-dashboard-stats>.stat-card:nth-child(1):before{content:"PAID"}
+  .member-dashboard-stats>.stat-card:nth-child(2):before{content:"STATUS"}
+  .member-dashboard-stats>.stat-card:nth-child(3):before{content:"EVENTS"}
+  .member-dashboard-stats>.stat-card:nth-child(4):before{content:"ACCESS"}
+  .member-dashboard-stats .stat-label{grid-column:1/-1;grid-row:2;align-self:end;font-size:.72rem;line-height:1.15;overflow-wrap:anywhere}
+  .member-dashboard-stats .stat-card strong{grid-column:1/-1;grid-row:3;align-self:start;font-size:1.15rem;line-height:1.15;letter-spacing:-.03em;white-space:nowrap}
+}
 .report-stats{grid-template-columns:repeat(4,minmax(0,1fr));grid-auto-rows:132px;align-items:stretch}
 .report-stats .stat-card{box-sizing:border-box;width:100%;height:132px;min-width:0;min-height:132px;max-height:132px}
 .report-stats .stat-card strong{max-width:100%;overflow-wrap:anywhere;font-size:clamp(.9rem,1.4vw,1.4rem)}
@@ -541,3 +596,28 @@ html:has(.login-screen),body:has(.login-screen),#root:has(.login-screen){width:1
 @keyframes mobile-sheet-in{from{transform:translateY(28px);opacity:.75}to{transform:translateY(0);opacity:1}}
 .app-shell:not(.dark) .nav-badge,.app-shell:not(.dark) .bottom-badge,.app-shell:not(.dark) .member-count-badge,.app-shell:not(.dark) .pay-later-admin-heading>span,.app-shell:not(.dark) .attendance-history-heading>span{background:#101e42!important;color:#fff!important}
 .app-shell.dark .nav-badge,.app-shell.dark .bottom-badge,.app-shell.dark .member-count-badge,.app-shell.dark .pay-later-admin-heading>span,.app-shell.dark .attendance-history-heading>span{background:#fff!important;color:#101e42!important}
+
+/* Keep the reference proportions after all shared mobile dashboard rules. */
+@media(max-width:650px){
+  .app-shell:has(.member-dashboard-stats) .dashboard-banner{box-sizing:border-box;display:flex;flex-direction:column;align-items:stretch;justify-content:space-between;gap:12px;height:174px;min-height:174px;margin:0;padding:16px 18px;border-radius:20px}
+  .app-shell:has(.member-dashboard-stats) .dashboard-banner>div:first-child{min-width:0}
+  .app-shell:has(.member-dashboard-stats) .dashboard-banner .eyebrow{display:flex;align-items:center;gap:6px;font-size:.58rem;letter-spacing:.09em;line-height:1.2}
+  .app-shell:has(.member-dashboard-stats) .dashboard-banner .eyebrow svg{flex:none}
+  .app-shell:has(.member-dashboard-stats) .dashboard-banner h1{margin:7px 0;font-size:1.35rem;line-height:1.15;letter-spacing:-.035em}
+  .app-shell:has(.member-dashboard-stats) .dashboard-banner .muted{font-size:.75rem;line-height:1.4}
+  .app-shell:has(.member-dashboard-stats) .dashboard-banner-actions{display:flex;width:100%;justify-content:space-between;align-items:center;gap:8px}
+  .app-shell:has(.member-dashboard-stats) .dashboard-passes-btn{max-width:none;min-height:36px;margin:0;padding:7px 12px;gap:7px;border-radius:999px;font-size:.72rem;white-space:nowrap}
+  .app-shell:has(.member-dashboard-stats) .dashboard-passes-btn svg{width:14px;height:14px}
+  .app-shell:has(.member-dashboard-stats) .dashboard-account-status{padding:6px 9px;font-size:.65rem}
+  .member-dashboard-stats{grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-rows:110px;gap:10px}
+  .member-dashboard-stats .stat-card{box-sizing:border-box;display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-rows:32px 1fr auto;align-items:center;justify-items:stretch;column-gap:6px;row-gap:3px;width:100%;height:110px;min-height:110px;min-width:0;padding:12px 14px;border-radius:16px;text-align:left}
+  .member-dashboard-stats .stat-top{grid-column:1;grid-row:1;align-self:center}
+  .member-dashboard-stats .stat-icon{width:34px;height:34px;border-radius:12px}
+  .member-dashboard-stats .stat-card:before{grid-column:2;grid-row:1;align-self:center;justify-self:end;color:var(--muted);font-size:.58rem;font-weight:700;letter-spacing:.06em;text-align:right}
+  .member-dashboard-stats>.stat-card:nth-child(1):before{content:"PAID"}
+  .member-dashboard-stats>.stat-card:nth-child(2):before{content:"STATUS"}
+  .member-dashboard-stats>.stat-card:nth-child(3):before{content:"EVENTS"}
+  .member-dashboard-stats>.stat-card:nth-child(4):before{content:"ACCESS"}
+  .member-dashboard-stats .stat-label{grid-column:1/-1;grid-row:2;align-self:end;font-size:.72rem;line-height:1.15;overflow-wrap:anywhere}
+  .member-dashboard-stats .stat-card strong{grid-column:1/-1;grid-row:3;align-self:start;font-size:1.15rem;line-height:1.15;letter-spacing:-.03em;white-space:nowrap}
+}
