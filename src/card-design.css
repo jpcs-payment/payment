@@ -1,4 +1,13 @@
 /* Shared card palette and surfaces based on the JPCS dashboard reference. */
+.session-recovery-banner { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 0 18px; padding: 14px 16px; border: 1px solid #e8c36c; border-radius: 12px; background: #fff8e6; color: #503b0c; }
+.session-recovery-banner > div { display: grid; gap: 4px; min-width: 0; }
+.session-recovery-banner > div span { font-size: .82rem; line-height: 1.4; }
+.session-recovery-banner .session-recovery-form { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.session-recovery-form input { width: min(190px, 100%); min-height: 40px; padding: 8px 10px; border: 1px solid #c8b77c; border-radius: 8px; background: #fff; color: #172334; }
+.session-recovery-banner .primary, .session-recovery-banner .outline-btn { min-height: 40px; white-space: nowrap; }
+.app-shell.dark .session-recovery-banner { border-color: #775d27; background: #352b17; color: #f5e8be; }
+.app-shell.dark .session-recovery-form input { border-color: #58647a; background: #101a2c; color: #f1f5fb; }
+.reconnect-signin-form { display: grid; gap: 9px; margin-top: 18px; }
 .app-shell :is(.panel, .stat-card, .settings-card, .attendance-history, .pass-card, .review-card, .scanner-stat, .scanner-result-card, .method-card) {
   background-color: var(--surface);
   border-color: var(--border);
@@ -302,6 +311,10 @@
   .scanner-details-backdrop { padding: 10px; }
   .scanner-details-modal { max-height: 88dvh; gap: 10px; padding: 14px; border-radius: 15px; }
   .scanner-details-heading h2 { font-size: 1rem; }
+  .session-recovery-banner { align-items: stretch; flex-direction: column; gap: 10px; margin-bottom: 12px; padding: 12px; }
+  .session-recovery-banner .session-recovery-form { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr) auto; justify-content: stretch; }
+  .session-recovery-form input { width: 100%; min-width: 0; }
+  .session-recovery-banner .primary, .session-recovery-banner .outline-btn { width: 100%; }
   .scanner-detail-pass { grid-template-columns: minmax(0,1fr) auto; gap: 8px; padding: 9px; }
   .scanner-detail-pass.has-qr { grid-template-columns: 56px minmax(0,1fr); }
   .scanner-pass-qr { width: 52px; height: 52px; }

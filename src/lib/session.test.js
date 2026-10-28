@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { getValidSession, invokeWithSessionRefresh } from './session.js'
+import { getValidSession, invokeWithSessionRefresh, refreshSession } from './session.js'
 
 const validSession = (token = 'access-token', expiresAt = Math.floor(Date.now() / 1000) + 3600) => ({
   access_token: token,
@@ -137,4 +137,44 @@ test('does not refresh or retry authorization failures', async () => {
   assert.equal(calls, 1)
   assert.equal(refreshes, 0)
   assert.equal(result.error.context.status, 403)
+})
+
+test('shares one refresh request across concurrent callers', async () => {
+  let refreshes = 0
+  let resolveRefresh
+  const refreshed = validSession('fresh-token')
+  const auth = {
+    getSession: async () => ({ data: { session: validSession() }, error: null }),
+    refreshSession: async () => {
+      refreshes++
+      return new Promise(resolve => { resolveRefresh = resolve })
+    },
+  }
+
+  const first = refreshSession(auth)
+  const second = refreshSession(auth)
+  await new Promise(resolve => setImmediate(resolve))
+  resolveRefresh({ data: { session: refreshed }, error: null })
+
+  assert.equal(await first, refreshed)
+  assert.equal(await second, refreshed)
+  assert.equal(refreshes, 1)
+})
+
+test('does not repeatedly submit a refresh token Supabase has rejected', async () => {
+  let refreshes = 0
+  const authError = Object.assign(new Error('Invalid Refresh Token: Refresh Token Not Found'), { code: 'refresh_token_not_found' })
+  const auth = {
+    getSession: async () => ({ data: { session: validSession() }, error: null }),
+    refreshSession: async () => { refreshes++; return { data: { session: null }, error: authError } },
+  }
+  const originalWarn = console.warn
+  console.warn = () => {}
+  try {
+    await assert.rejects(refreshSession(auth), /Refresh Token Not Found/)
+    await assert.rejects(refreshSession(auth), /Refresh Token Not Found/)
+    assert.equal(refreshes, 1)
+  } finally {
+    console.warn = originalWarn
+  }
 })

@@ -206,7 +206,7 @@ Deno.serve(async(req)=>{
       return response({ok:true,results})
     }
     if(action==='members.create'){
-      if(profile.role==='member')return response({error:'Officer access required.'},403)
+      if(profile.role!=='admin')return response({error:'Administrator permissions are required.'},403)
       const {fullName,email,password,yearLevel,role}=input
       if(typeof fullName!=='string'||!fullName.trim())return response({error:'Please enter a valid full name.'},400)
       if(typeof email!=='string'||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()))return response({error:'Please enter a valid email address.'},400)
@@ -267,6 +267,22 @@ Deno.serve(async(req)=>{
       await admin.auth.admin.updateUserById(userId,{user_metadata:{full_name:fullName.trim()}}).catch(()=>{})
       return response({ok:true,profile:updated})
     }
+    if(action==='members.resetPassword'){
+      if(profile.role!=='admin')return response({error:'Administrator permissions are required to reset member passwords.'},403)
+      const {userId}=input
+      if(typeof userId!=='string'||!userId)return response({error:'Member ID is required.'},400)
+      const {data:target,error:targetError}=await admin.from('profiles').select('id').eq('id',userId).maybeSingle()
+      if(targetError)return response({error:'Could not find the member profile.'},500)
+      if(!target)return response({error:'Member profile not found.'},404)
+      const {error:profileUpdateError}=await admin.from('profiles').update({must_change_password:true}).eq('id',userId)
+      if(profileUpdateError)return response({error:'Could not prepare this account for a password reset.'},500)
+      const {error:passwordError}=await admin.auth.admin.updateUserById(userId,{password:'JPCS2026'})
+      if(passwordError){
+        await admin.from('profiles').update({must_change_password:false}).eq('id',userId)
+        return response({error:'Could not reset this member password.'},400)
+      }
+      return response({ok:true})
+    }
     if(action==='members.delete'){
       if(profile.role!=='admin')return response({error:'Administrator permissions are required.'},403)
       const {userId}=input
@@ -313,7 +329,7 @@ Deno.serve(async(req)=>{
       const {data:payment,error:paymentError}=await admin.from('payments').select('id,registration_id,reviewed_by,reviewed_at').eq('id',paymentId).maybeSingle()
       if(paymentError)return response({error:'Could not load payment review details.'},500)
       if(!payment)return response({error:'Payment not found.'},404)
-      if(profile.role==='member'){
+      if(profile.role!=='admin'){
         const {data:ownedRegistration,error:registrationError}=await admin.from('registrations').select('id').eq('id',payment.registration_id).eq('member_id',user.id).maybeSingle()
         if(registrationError)return response({error:'Could not verify payment ownership.'},500)
         if(!ownedRegistration)return response({error:'Payment not found.'},404)
@@ -407,7 +423,7 @@ Deno.serve(async(req)=>{
     }
 
     if(action==='payments.review'){
-      if(profile.role==='member')return response({error:'Officer access required.'},403)
+      if(profile.role!=='admin')return response({error:'Administrator access is required to review payments.'},403)
       const {decision,remarks=''}=input
       if(!['approved','rejected'].includes(decision)||typeof remarks!=='string'||remarks.length>1000)return response({error:'Invalid decision or remarks.'},400)
       if(decision==='rejected'&&!remarks.trim())return response({error:'Add a rejection reason for the member.'},400)
@@ -422,7 +438,7 @@ Deno.serve(async(req)=>{
     }
 
     if(action==='passes.checkin'){
-      if(profile.role==='member')return response({error:'Officer access required.'},403)
+      if(profile.role!=='admin')return response({error:'Administrator access is required to check in passes.'},403)
       const targetEvent=typeof input.eventId==='string'?input.eventId:''
       const {data:pass,error:passError}=await admin.from('passes').select('id,checked_in_at,pay_later,registrations(id,event_id,pay_later_due_at,profiles(full_name),events(id,name))').eq('token',params.token).maybeSingle()
       if(passError)return response({error:'Could not verify this pass right now.'},500)
@@ -444,7 +460,7 @@ Deno.serve(async(req)=>{
 
     if(action==='receipts.url'){
       const {data:payment}=await admin.from('payments').select('receipt_path,registrations(member_id)').eq('id',params.paymentId).maybeSingle()
-      if(!payment||(profile.role==='member'&&payment.registrations.member_id!==user.id))return response({error:'Receipt not found.'},404)
+      if(!payment||(profile.role!=='admin'&&payment.registrations.member_id!==user.id))return response({error:'Receipt not found.'},404)
       if(!payment.receipt_path)return response({error:'No receipt was uploaded.'},404)
       const {data,error}=await admin.storage.from('payment-receipts').createSignedUrl(payment.receipt_path,90)
       if(error)return response({error:'Could not access receipt.'},500)
@@ -453,7 +469,7 @@ Deno.serve(async(req)=>{
 
     if(action==='passes.qr'){
       const {data:pass}=await admin.from('passes').select('token,registrations(member_id)').eq('id',params.passId).maybeSingle()
-      if(!pass||(profile.role==='member'&&pass.registrations.member_id!==user.id))return response({error:'Pass not found.'},404)
+      if(!pass||(profile.role!=='admin'&&pass.registrations.member_id!==user.id))return response({error:'Pass not found.'},404)
       return response({dataUrl:await QRCode.toDataURL(`${resolvedOrigin}/verify/${pass.token}`)})
     }
     return response({error:'Unknown Edge Function action.'},404)
