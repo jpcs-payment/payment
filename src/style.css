@@ -439,6 +439,16 @@ html:has(.login-screen),body:has(.login-screen),#root:has(.login-screen){width:1
   .member-dashboard-stats .stat-card strong{grid-column:1/-1;grid-row:3;align-self:start;font-size:1.15rem;line-height:1.15;letter-spacing:-.03em;white-space:nowrap}
 }
 
+/* Keep admin member actions readable in the directory table and member cards. */
+.table-wrap:has(td[data-label="Year level"]) th:last-child{width:260px;min-width:260px}
+.table-wrap:has(td[data-label="Year level"]) .member-row-actions{flex-wrap:nowrap;gap:8px}
+.table-wrap:has(td[data-label="Year level"]) .member-row-actions button{min-height:36px;justify-content:center;white-space:nowrap}
+@media(max-width:650px){
+  .table-wrap:has(td[data-label="Year level"]) tbody td[data-label="Action"]{grid-column:1/-1;align-content:start}
+  .table-wrap:has(td[data-label="Year level"]) .member-row-actions{display:grid;width:100%;grid-template-columns:repeat(auto-fit,minmax(88px,1fr));gap:8px}
+  .table-wrap:has(td[data-label="Year level"]) .member-row-actions button{width:100%;min-width:0;min-height:40px;padding:7px 6px;font-size:.75rem;line-height:1.2;white-space:normal;overflow-wrap:anywhere}
+}
+
 /* Member dashboard mobile layout follows the compact reference-card structure. */
 .dashboard-banner-actions{display:flex;align-items:center;gap:10px}
 .dashboard-account-status{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid currentColor;border-radius:999px;color:inherit;font-size:.72rem;white-space:nowrap}
