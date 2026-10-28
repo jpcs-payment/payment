@@ -330,6 +330,7 @@ Deno.serve(async(req)=>{
       const {data:event,error:eventError}=await admin.from('events').select('*').eq('id',eventId).single()
       if(eventError||!event)return response({error:'Event not found.'},404)
       if(!event.active)return response({error:'This event is no longer active.'},400)
+      if(event.completed||(event.event_date&&new Date(event.event_date).getTime()<=Date.now()))return response({error:'This event is completed. New registrations and payments are closed.'},400)
       if(Number(event.price)>0)return response({error:'This is a paid event. Please submit payment instead.'},400)
       let {data:registration}=await admin.from('registrations').select('*').eq('member_id',user.id).eq('event_id',eventId).maybeSingle()
       if(!registration){
@@ -356,6 +357,10 @@ Deno.serve(async(req)=>{
     if(action==='payments.pay_later'){
       const {eventId}=input
       if(typeof eventId!=='string'||!/^[-0-9a-f]{36}$/i.test(eventId))return response({error:'Event ID is invalid.'},400)
+      const {data:event,error:eventError}=await admin.from('events').select('completed,event_date').eq('id',eventId).maybeSingle()
+      if(eventError)return response({error:'Could not check event availability.'},500)
+      if(!event)return response({error:'Event not found.'},404)
+      if(event.completed||(event.event_date&&new Date(event.event_date).getTime()<=Date.now()))return response({error:'Payments are closed for this completed event.'},400)
       const {data:registration,error}=await admin.rpc('submit_pay_later',{p_member:user.id,p_event:eventId})
       if(error)return response({error:error.message},400)
        const email=await dispatchOutbox(admin,resolvedOrigin,10,`pay-later:${registration.id}`).catch(error=>{
@@ -388,6 +393,10 @@ Deno.serve(async(req)=>{
       const {eventId,amount,method,transactionReference='',receiptPath=null}=input
       const paidAmount=Number(amount)
       if(!eventId||!Number.isFinite(paidAmount)||paidAmount<=0||!['cash','gcash','maribank'].includes(method))return response({error:'Check event, amount, and payment method.'},400)
+      const {data:event,error:eventError}=await admin.from('events').select('completed,event_date').eq('id',eventId).maybeSingle()
+      if(eventError)return response({error:'Could not check event availability.'},500)
+      if(!event)return response({error:'Event not found.'},404)
+      if(event.completed||(event.event_date&&new Date(event.event_date).getTime()<=Date.now()))return response({error:'Payments are closed for this completed event.'},400)
       if(typeof transactionReference!=='string'||transactionReference.length>120)return response({error:'Transaction reference must be 120 characters or fewer.'},400)
       if(method==='cash'&&receiptPath)return response({error:'Cash payment does not accept receipt uploads.'},400)
       if(method!=='cash'&&(!receiptPath||!receiptPath.startsWith(`${user.id}/`)))return response({error:'Upload a receipt before submitting.'},400)

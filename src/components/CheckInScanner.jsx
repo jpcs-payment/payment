@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, Camera, CheckCircle2, Keyboard, RefreshCw, ScanLine, XCircle } from 'lucide-react'
+import { AlertTriangle, Camera, CheckCircle2, Keyboard, QrCode, RefreshCw, ScanLine, X, XCircle } from 'lucide-react'
 import { BrowserQRCodeReader } from '@zxing/browser'
 
 const passTokenFromValue=value=>{
@@ -15,6 +15,41 @@ const passTokenFromValue=value=>{
 }
 
 const formatDateTime=value=>value?new Date(value).toLocaleString('en-PH',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):''
+
+function PassQrPreview({pass,api}){
+  const [qr,setQr]=useState('')
+  const [error,setError]=useState('')
+  useEffect(()=>{
+    let alive=true
+    api(`/api/passes/${pass.id}/qr`,{},'receipt').then(data=>{if(alive)setQr(data.dataUrl)}).catch(err=>{if(alive)setError(err.message||'Could not load this QR code.')})
+    return()=>{alive=false}
+  },[api,pass.id])
+  return <div className="scanner-pass-qr">{qr?<img src={qr} alt={`Entrance QR code for ${pass.registration?.profiles?.full_name||'member'}`}/>:<div className="scanner-qr-placeholder"><QrCode size={24}/><small>{error||'Loading QR…'}</small></div>}</div>
+}
+
+function ScannerDetailsModal({type,passes,api,onClose}){
+  useEffect(()=>{
+    const closeOnEscape=event=>{if(event.key==='Escape')onClose()}
+    document.addEventListener('keydown',closeOnEscape)
+    return()=>document.removeEventListener('keydown',closeOnEscape)
+  },[onClose])
+  const showQr=type==='qr'||type==='remaining'
+  const title=type==='checked'?'Members checked in':type==='qr'?'Event QR codes':type==='paylater'?'Pay Later passes':'Remaining entry passes'
+  const subtitle=type==='checked'?'Members recorded as admitted for this event.':type==='qr'?'Entrance QR codes assigned to this event.':'Passes that have not been checked in yet.'
+  return <div className="scanner-details-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget)onClose()}}><section className="scanner-details-modal" role="dialog" aria-modal="true" aria-labelledby="scanner-details-title">
+    <header className="scanner-details-heading"><div><p className="eyebrow">EVENT RECORD</p><h2 id="scanner-details-title">{title}</h2><p>{subtitle}</p></div><button type="button" className="icon-button" onClick={onClose} aria-label="Close details"><X size={18}/></button></header>
+    {passes.length?<div className="scanner-details-list">{passes.map(pass=>{
+      const member=pass.registration?.profiles||{}
+      const name=member.full_name||'Member'
+      return <article className={`scanner-detail-pass ${showQr?'has-qr':''}`} key={pass.id}>
+        {showQr&&<PassQrPreview pass={pass} api={api}/>}
+        <div className="scanner-detail-member"><b>{name}</b><small>{member.email||''}</small><small>{pass.pay_later?'Pay Later':'Entrance pass'}{pass.checked_in_at?` · Checked in ${formatDateTime(pass.checked_in_at)}`:''}</small>{type==='paylater'&&pass.registration?.pay_later_due_at&&<small>Due {formatDateTime(pass.registration.pay_later_due_at)}</small>}</div>
+        <span className={`scanner-detail-status ${pass.pay_later?'paylater':pass.checked_in_at?'used':'ready'}`}>{pass.pay_later?'Pay Later':pass.checked_in_at?'Checked in':'Ready'}</span>
+      </article>
+    })}</div>:<p className="muted scanner-details-empty">No passes match this category for the selected event.</p>}
+    <footer className="scanner-details-footer"><button type="button" className="primary" onClick={onClose}>Done</button></footer>
+  </section></div>
+}
 
 function ResultCard({result}){
   if(!result)return <div className="scanner-result scanner-result-card idle"><div className="result-head"><ScanLine size={20}/><div><b>Ready to scan</b><small>Point the camera at a member's entrance pass.</small></div></div></div>
@@ -39,6 +74,7 @@ export default function CheckInScanner({events,passes,api,onCheckedIn}){
   const [result,setResult]=useState(null)
   const [manual,setManual]=useState('')
   const [attendanceFilter,setAttendanceFilter]=useState('all')
+  const [detailsType,setDetailsType]=useState('')
   const videoRef=useRef(null)
   const controlsRef=useRef(null)
   const busyRef=useRef(false)
@@ -84,7 +120,11 @@ export default function CheckInScanner({events,passes,api,onCheckedIn}){
   const checkedCount=eventPasses.filter(p=>p.checked_in_at).length
   const entrancePasses=eventPasses.filter(p=>!p.pay_later)
   const checkedEntranceCount=entrancePasses.filter(p=>p.checked_in_at).length
-  const payLaterCount=eventPasses.filter(p=>p.pay_later).length
+  const checkedInPasses=useMemo(()=>eventPasses.filter(p=>p.checked_in_at).sort((a,b)=>new Date(b.checked_in_at)-new Date(a.checked_in_at)),[eventPasses])
+  const payLaterPasses=useMemo(()=>eventPasses.filter(p=>p.pay_later),[eventPasses])
+  const remainingPasses=useMemo(()=>entrancePasses.filter(p=>!p.checked_in_at),[entrancePasses])
+  const payLaterCount=payLaterPasses.length
+  const detailsPasses=detailsType==='checked'?checkedInPasses:detailsType==='qr'?eventPasses:detailsType==='paylater'?payLaterPasses:remainingPasses
   const secureContext=typeof window==='undefined'||window.isSecureContext
   const liveCameraAvailable=secureContext&&!!navigator.mediaDevices?.getUserMedia
 
@@ -215,10 +255,10 @@ export default function CheckInScanner({events,passes,api,onCheckedIn}){
     {cameraError&&<div className="scanner-notice"><AlertTriangle size={16}/><span>{cameraError}</span></div>}
     {!secureContext&&!cameraError&&<div className="scanner-notice"><AlertTriangle size={16}/><span>Live camera needs an HTTPS site. You can still use Take photo or manual token entry now.</span></div>}
     <div className="scanner-stats">
-      <div className="scanner-stat"><b>{checkedCount}</b><span>Checked in</span></div>
-      <div className="scanner-stat"><b>{eventPasses.length}</b><span>QR codes</span></div>
-      <div className="scanner-stat"><b>{payLaterCount}</b><span>Pay Later</span></div>
-       <div className="scanner-stat"><b>{Math.max(0,entrancePasses.length-checkedEntranceCount)}</b><span>Remaining entry passes</span></div>
+      <button type="button" className="scanner-stat scanner-stat-action" onClick={()=>setDetailsType('checked')} aria-label={`View ${checkedCount} checked-in members`}><b>{checkedCount}</b><span>Checked in</span><small>View members</small></button>
+      <button type="button" className="scanner-stat scanner-stat-action" onClick={()=>setDetailsType('qr')} aria-label={`View ${eventPasses.length} event QR codes`}><b>{eventPasses.length}</b><span>QR codes</span><small>View QR codes</small></button>
+      <button type="button" className="scanner-stat scanner-stat-action" onClick={()=>setDetailsType('paylater')} aria-label={`View ${payLaterCount} Pay Later passes`}><b>{payLaterCount}</b><span>Pay Later</span><small>View members</small></button>
+      <button type="button" className="scanner-stat scanner-stat-action" onClick={()=>setDetailsType('remaining')} aria-label={`View ${remainingPasses.length} remaining entry passes`}><b>{Math.max(0,entrancePasses.length-checkedEntranceCount)}</b><span>Remaining entry passes</span><small>View passes</small></button>
     </div>
     <div className="scanner-grid">
       <div className="scanner-main">
@@ -240,6 +280,7 @@ export default function CheckInScanner({events,passes,api,onCheckedIn}){
     <section className="attendance-history" aria-labelledby="attendance-history-title">
        <div className="attendance-history-heading"><div><p className="eyebrow">EVENT RECORD</p><h3 id="attendance-history-title">Attendance history</h3></div><label className="attendance-filter">Show <select value={attendanceFilter} onChange={e=>setAttendanceFilter(e.target.value)}><option value="all">All</option><option value="paid">Paid</option><option value="paylater">Pay Later</option></select></label><span>{attendance.length}</span></div>
        {attendance.length ? <div className="table-wrap"><table><thead><tr><th>Member</th><th>Checked in</th><th>Payment</th></tr></thead><tbody>{attendance.map(pass=><tr key={pass.id}><td data-label="Member"><b>{pass.registration?.profiles?.full_name||'Member'}</b><small className="method">{pass.registration?.profiles?.email||''}</small></td><td data-label="Checked in">{formatDateTime(pass.checked_in_at)}</td><td data-label="Payment">{pass.pay_later?'Pay Later':'Paid'}</td></tr>)}</tbody></table></div> : <p className="muted attendance-empty">No checked-in members match this filter.</p>}
-    </section>
-  </div>
+     </section>
+     {detailsType&&<ScannerDetailsModal type={detailsType} passes={detailsPasses} api={api} onClose={()=>setDetailsType('')}/>}
+   </div>
 }
