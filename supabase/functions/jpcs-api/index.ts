@@ -49,7 +49,7 @@ Deno.serve(async(req)=>{
     if(!tokens.length)return response({error:'Authentication required.'},401)
     let user=null,userError=null
     for(const accessToken of tokens){const result=await authClient.auth.getUser(accessToken);user=result.data.user;userError=result.error;if(user)break}
-    if(userError||!user){console.warn('Edge Function token validation failed:',userError?.message);return response({error:'Invalid session. Please sign out, sign back in, then retry.'},401)}
+    if(userError||!user){console.warn('Edge Function token validation failed.',{name:userError?.name,code:userError?.code});return response({error:'Your sign-in could not be validated. Please sign in again.'},401)}
     const {data:profile,error:profileError}=await admin.from('profiles').select('*').eq('id',user.id).single()
     if(profileError||!profile)return response({error:'JPCS profile is not provisioned.'},403)
     if(action==='profile.get')return response({profile})

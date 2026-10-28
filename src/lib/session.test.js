@@ -20,17 +20,30 @@ test('uses a valid persisted session without refreshing it', async () => {
   assert.equal(refreshes, 0)
 })
 
-test('refreshes a session before its access token expires', async () => {
-  const refreshed = validSession('fresh-token')
+test('does not rotate refresh tokens when session storage lookup fails', async () => {
+  let refreshes = 0
   const auth = {
-    getSession: async () => ({ data: { session: validSession('nearly-expired', Math.floor(Date.now() / 1000)) }, error: null }),
-    refreshSession: async () => ({ data: { session: refreshed }, error: null }),
+    getSession: async () => ({ data: { session: null }, error: new Error('temporary storage failure') }),
+    refreshSession: async () => { refreshes++; return { data: { session: validSession('fresh') }, error: null } },
   }
 
-  assert.equal(await getValidSession(auth), refreshed)
+  await assert.rejects(getValidSession(auth), /temporary storage failure/)
+  assert.equal(refreshes, 0)
 })
 
-test('refreshes and retries an Edge Function request once after a 401', async () => {
+test('lets Supabase return its current session without manually refreshing near expiry', async () => {
+  const current = validSession('nearly-expired', Math.floor(Date.now() / 1000))
+  let refreshes = 0
+  const auth = {
+    getSession: async () => ({ data: { session: current }, error: null }),
+    refreshSession: async () => { refreshes++; return { data: { session: validSession('fresh-token') }, error: null } },
+  }
+
+  assert.equal(await getValidSession(auth), current)
+  assert.equal(refreshes, 0)
+})
+
+test('refreshes and retries a read-only Edge Function request once after a 401', async () => {
   const refreshed = validSession('fresh-token')
   let refreshes = 0
   const tokens = []
@@ -43,11 +56,70 @@ test('refreshes and retries an Edge Function request once after a 401', async ()
     return tokens.length === 1
       ? { data: null, error: { context: { status: 401 } } }
       : { data: { ok: true }, error: null }
-  })
+  }, { retryUnauthorized: true })
 
   assert.equal(refreshes, 1)
   assert.deepEqual(tokens, ['access-token', 'fresh-token'])
   assert.deepEqual(result.data, { ok: true })
+})
+
+test('does not retry a state-changing request after a 401', async () => {
+  let refreshes = 0
+  let calls = 0
+  const auth = {
+    getSession: async () => ({ data: { session: validSession() }, error: null }),
+    refreshSession: async () => { refreshes++; return { data: { session: validSession('fresh') }, error: null } },
+  }
+  const result = await invokeWithSessionRefresh(auth, async () => {
+    calls++
+    return { data: null, error: { context: { status: 401 } } }
+  })
+
+  assert.equal(calls, 1)
+  assert.equal(refreshes, 0)
+  assert.equal(result.error.context.status, 401)
+})
+
+test('does not refresh or retry after a transient request failure', async () => {
+  let refreshes = 0
+  let calls = 0
+  const auth = {
+    getSession: async () => ({ data: { session: validSession() }, error: null }),
+    refreshSession: async () => { refreshes++; return { data: { session: validSession('fresh') }, error: null } },
+  }
+
+  await assert.rejects(invokeWithSessionRefresh(auth, async () => {
+    calls++
+    throw new TypeError('Failed to fetch')
+  }), /Failed to fetch/)
+  assert.equal(calls, 1)
+  assert.equal(refreshes, 0)
+})
+
+test('does not loop when a revoked refresh token cannot recover a read-only request', async () => {
+  let refreshes = 0
+  let calls = 0
+  const auth = {
+    getSession: async () => ({ data: { session: validSession() }, error: null }),
+    refreshSession: async () => {
+      refreshes++
+      return { data: { session: null }, error: Object.assign(new Error('Refresh token revoked'), { code: 'invalid_refresh_token' }) }
+    },
+  }
+  const originalWarn = console.warn
+  console.warn = () => {}
+  try {
+    const result = await invokeWithSessionRefresh(auth, async () => {
+      calls++
+      return { data: null, error: { context: { status: 401 } } }
+    }, { retryUnauthorized: true })
+
+    assert.equal(result.error.context.status, 401)
+    assert.equal(calls, 1)
+    assert.equal(refreshes, 1)
+  } finally {
+    console.warn = originalWarn
+  }
 })
 
 test('does not refresh or retry authorization failures', async () => {
