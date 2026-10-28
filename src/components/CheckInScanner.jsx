@@ -176,6 +176,9 @@ export default function CheckInScanner({events,passes,api,onCheckedIn}){
       }else if(data.payLater){
         setResult({kind:'warning',title:'Pay Later',member:data.member,event:data.event,message:data.message||'This member has an unpaid Pay Later balance and cannot be checked in yet.'})
         navigator.vibrate?.([60,50,60])
+      }else if(data.invalid){
+        setResult({kind:'invalid',title:'Invalid pass',message:data.message||'No JPCS entrance pass matches this QR code.'})
+        navigator.vibrate?.([120,60,120])
       }else if(data.wrongEvent){
         setResult({kind:'invalid',title:'Wrong event',member:data.member,event:data.event,message:data.message||'This pass belongs to a different event.'})
         navigator.vibrate?.([120,60,120])

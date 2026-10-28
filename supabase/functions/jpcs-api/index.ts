@@ -424,8 +424,9 @@ Deno.serve(async(req)=>{
     if(action==='passes.checkin'){
       if(profile.role==='member')return response({error:'Officer access required.'},403)
       const targetEvent=typeof input.eventId==='string'?input.eventId:''
-      const {data:pass}=await admin.from('passes').select('id,checked_in_at,pay_later,registrations(id,event_id,pay_later_due_at,profiles(full_name),events(id,name))').eq('token',params.token).maybeSingle()
-      if(!pass)return response({error:'Pass is invalid.'},404)
+      const {data:pass,error:passError}=await admin.from('passes').select('id,checked_in_at,pay_later,registrations(id,event_id,pay_later_due_at,profiles(full_name),events(id,name))').eq('token',params.token).maybeSingle()
+      if(passError)return response({error:'Could not verify this pass right now.'},500)
+      if(!pass)return response({valid:false,invalid:true,message:'No JPCS entrance pass matches this QR code.'})
       const registration=first(pass.registrations)
       const member=first(registration?.profiles)?.full_name||'Member'
       const event=first(registration?.events)?.name||'Event'
