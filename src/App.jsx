@@ -515,7 +515,7 @@ function PassCard({ pass }) {
     api(`/api/passes/${pass.id}/qr`, {}, 'receipt').then(d => { if (alive) setQr(d.dataUrl) }).catch(e => { if (alive) setErr(e.message) })
     return () => { alive = false }
   }, [pass.id])
-  return <div className="pass-card"><div className="pass-top"><div className="pass-symbol"><Ticket size={19} /></div><span className="pass-label">VERIFIED PASS</span></div><div className="pass-event"><div><b>{pass.event?.name}</b><span>{date(pass.event?.event_date)}</span></div></div>{qr ? <img className="actual-qr" src={qr} alt="Event entrance QR code" /> : <span className="small-muted">{err || 'Loading secure pass?'}</span>}<small className="pass-token">Pass ID {(pass.token || '').slice(0, 8)}••••</small><p className="pass-hint">{pass.checked_in_at ? 'Checked in' : 'Present this QR code at the event entrance.'}</p></div>
+  return <div className="pass-card"><div className="pass-top"><div className="pass-symbol"><Ticket size={19} /></div><span className="pass-label">VERIFIED PASS</span></div><div className="pass-event"><div><b>{pass.event?.name}</b><span>{date(pass.event?.event_date)}</span></div></div>{qr ? <img className="actual-qr" src={qr} alt="Event entrance QR code" /> : <span className="small-muted">{err || 'Loading secure pass?'}</span>}<div className="pass-card-footer"><small className="pass-token">Pass ID {(pass.token || '').slice(0, 8)}••••</small><p className="pass-hint">{pass.checked_in_at ? 'Checked in' : 'Present this QR code at the event entrance.'}</p></div></div>
 }
 
 function ProfileModal({ profile, onClose, onSaved, notify, setError }) {

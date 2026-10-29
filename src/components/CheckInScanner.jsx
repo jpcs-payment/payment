@@ -73,6 +73,7 @@ export default function CheckInScanner({events,passes,api,onCheckedIn}){
   const [cameraError,setCameraError]=useState('')
   const [result,setResult]=useState(null)
   const [manual,setManual]=useState('')
+  const [memberSearch,setMemberSearch]=useState('')
   const [attendanceFilter,setAttendanceFilter]=useState('all')
   const [detailsType,setDetailsType]=useState('')
   const videoRef=useRef(null)
@@ -83,6 +84,8 @@ export default function CheckInScanner({events,passes,api,onCheckedIn}){
   const eventRef=useRef(eventId)
   const passesRef=useRef(passes)
   const aliveRef=useRef(true)
+  const activeRef=useRef(false)
+  const stopScannerRef=useRef(null)
   useEffect(()=>{eventRef.current=eventId},[eventId])
   useEffect(()=>{passesRef.current=passes},[passes])
 
@@ -104,6 +107,7 @@ export default function CheckInScanner({events,passes,api,onCheckedIn}){
     aliveRef.current=true
     return()=>{
       aliveRef.current=false
+      activeRef.current=false
       try{controlsRef.current?.stop()}catch{}
       controlsRef.current=null
       const video=videoRef.current
@@ -116,6 +120,15 @@ export default function CheckInScanner({events,passes,api,onCheckedIn}){
 
   const selectedEvent=sortedEvents.find(e=>e.id===eventId)
   const eventPasses=useMemo(()=>passes.filter(p=>(p.event?.id||p.registration?.event_id)===eventId),[passes,eventId])
+  const matchingMemberPasses=useMemo(()=>{
+    const query=memberSearch.trim().toLowerCase()
+    if(!query)return []
+    return eventPasses.filter(pass=>{
+      if(pass.pay_later)return false
+      const member=pass.registration?.profiles||{}
+      return [member.full_name,member.email,member.student_number].some(value=>String(value||'').toLowerCase().includes(query))
+    }).slice(0,8)
+  },[eventPasses,memberSearch])
   const attendance=useMemo(()=>eventPasses.filter(p=>p.checked_in_at&&(attendanceFilter==='all'||(attendanceFilter==='paylater'?p.pay_later:!p.pay_later))).sort((a,b)=>new Date(b.checked_in_at)-new Date(a.checked_in_at)),[eventPasses,attendanceFilter])
   const checkedCount=eventPasses.filter(p=>p.checked_in_at).length
   const entrancePasses=eventPasses.filter(p=>!p.pay_later)
@@ -129,6 +142,7 @@ export default function CheckInScanner({events,passes,api,onCheckedIn}){
   const liveCameraAvailable=secureContext&&!!navigator.mediaDevices?.getUserMedia
 
   const stopScanner=()=>{
+    activeRef.current=false
     try{controlsRef.current?.stop()}catch{}
     controlsRef.current=null
     const video=videoRef.current
@@ -139,6 +153,15 @@ export default function CheckInScanner({events,passes,api,onCheckedIn}){
     setScanning(false)
     setStarting(false)
   }
+  stopScannerRef.current=stopScanner
+
+  useEffect(()=>{
+    const stopWhenHidden=()=>{
+      if(document.hidden)stopScannerRef.current?.()
+    }
+    document.addEventListener('visibilitychange',stopWhenHidden)
+    return()=>document.removeEventListener('visibilitychange',stopWhenHidden)
+  },[])
 
   const processToken=async raw=>{
     if(!aliveRef.current)return
@@ -195,7 +218,7 @@ export default function CheckInScanner({events,passes,api,onCheckedIn}){
 
   const handleDecoded=text=>{
     const now=Date.now()
-    if(busyRef.current||now<pauseUntilRef.current)return
+    if(!activeRef.current||document.hidden||busyRef.current||now<pauseUntilRef.current)return
     if(lastScanRef.current.text===text&&now-lastScanRef.current.at<5000)return
     lastScanRef.current={text,at:now}
     processToken(text)
@@ -203,19 +226,23 @@ export default function CheckInScanner({events,passes,api,onCheckedIn}){
 
   const startScanner=async()=>{
     setCameraError('')
-    if(scanning||starting)return
+    if(scanning||starting||activeRef.current)return
     if(!eventRef.current){setCameraError('Select the event before starting the camera.');return}
     if(!secureContext){setCameraError('Live camera requires HTTPS. Use Take photo here, or deploy the site to enable continuous scanning.');return}
     if(!liveCameraAvailable){setCameraError('This browser cannot access a camera. Use Take photo or manual token entry.');return}
     if(!videoRef.current){setCameraError('The camera preview is not ready. Try again.');return}
+    activeRef.current=true
     setStarting(true)
     try{
-      const reader=new BrowserQRCodeReader()
-      const controls=await reader.decodeFromConstraints({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}}},videoRef.current,(found)=>{if(found)handleDecoded(found.getText())})
-      if(!aliveRef.current){controls.stop();return}
+      // ZXing decodes synchronously in a timer loop. Lowering the capture size
+      // and scan cadence reduces main-thread work, especially on mobile.
+      const reader=new BrowserQRCodeReader(undefined,{delayBetweenScanAttempts:750,delayBetweenScanSuccess:1000})
+      const controls=await reader.decodeFromConstraints({video:{facingMode:{ideal:'environment'},width:{ideal:640,max:800},height:{ideal:480,max:600}}},videoRef.current,(found)=>{if(found&&activeRef.current&&!document.hidden)handleDecoded(found.getText())})
+      if(!aliveRef.current||!activeRef.current||document.hidden){controls.stop();return}
       controlsRef.current=controls
       setScanning(true)
     }catch(error){
+      activeRef.current=false
       const name=error?.name||''
       setCameraError(name==='NotAllowedError'?'Camera permission was denied. Allow camera access for this site, or use Take photo.':name==='NotFoundError'?'No camera was found on this device. Use Take photo or manual token entry.':`Could not start the camera: ${error?.message||'unknown error'}`)
     }finally{
@@ -249,7 +276,7 @@ export default function CheckInScanner({events,passes,api,onCheckedIn}){
 
   return <div className="checkin-scanner">
     <div className="scanner-toolbar">
-      <label className="scanner-event"><span>Choose Event</span><select value={eventId} onChange={event=>{setEventId(event.target.value);eventRef.current=event.target.value;setResult(null)}} disabled={scanning||starting}>{!sortedEvents.length&&<option value="">No events available</option>}{sortedEvents.map(event=><option key={event.id} value={event.id}>{event.name}{event.event_date?` · ${new Date(event.event_date).toLocaleDateString('en-PH',{month:'short',day:'numeric'})}`:''}{event.active?'':' (inactive)'}</option>)}</select></label>
+      <label className="scanner-event"><span>Choose Event</span><select value={eventId} onChange={event=>{setEventId(event.target.value);eventRef.current=event.target.value;setResult(null);setMemberSearch('')}} disabled={scanning||starting}>{!sortedEvents.length&&<option value="">No events available</option>}{sortedEvents.map(event=><option key={event.id} value={event.id}>{event.name}{event.event_date?` · ${new Date(event.event_date).toLocaleDateString('en-PH',{month:'short',day:'numeric'})}`:''}{event.active?'':' (inactive)'}</option>)}</select></label>
       <div className="scanner-actions">
         {scanning?<button className="outline-btn" onClick={stopScanner}>Stop camera</button>:<button className="primary" onClick={startScanner} disabled={starting||!eventId||!liveCameraAvailable} title={!liveCameraAvailable?'Live camera requires HTTPS':undefined}>{starting?'Starting camera…':<>Start camera <Camera size={16}/></>}</button>}
         <label className="outline-btn scanner-photo"><Camera size={15}/> Take photo<input type="file" accept="image/*" capture="environment" onChange={handlePhoto} hidden/></label>
@@ -277,6 +304,21 @@ export default function CheckInScanner({events,passes,api,onCheckedIn}){
           <label><Keyboard size={15}/> Manual pass entry</label>
           <div className="manual-row"><input value={manual} onChange={event=>setManual(event.target.value)} placeholder="Pass token or QR link" disabled={scanning}/><button className="outline-btn" disabled={!manual.trim()||scanning}>Check in</button></div>
         </form>
+        <section className="scanner-member-lookup" aria-label="Check in by member">
+          <label htmlFor="scanner-member-search">Find a member instead</label>
+          <input id="scanner-member-search" type="search" value={memberSearch} onChange={event=>setMemberSearch(event.target.value)} placeholder="Search name, email, or student number" disabled={scanning||starting||!eventId}/>
+          {memberSearch.trim()&&<div className="scanner-member-results" aria-live="polite">
+            {matchingMemberPasses.length?matchingMemberPasses.map(pass=>{
+              const member=pass.registration?.profiles||{}
+              const checking=result?.kind==='checking'
+              return <div className="scanner-member-result" key={pass.id}>
+                <div><b>{member.full_name||'Member'}</b><small>{member.student_number||member.email||'Entrance pass'}</small></div>
+                <button type="button" className="outline-btn small" disabled={checking||!!pass.checked_in_at||scanning||starting} onClick={()=>processToken(pass.token)}>{pass.checked_in_at?'Already checked in':checking?'Checking…':'Check in'}</button>
+              </div>
+            }):<p className="scanner-member-empty">No entrance passes found for this event.</p>}
+            {matchingMemberPasses.length===8&&<small className="scanner-member-limit">Showing the first 8 matches. Refine your search.</small>}
+          </div>}
+        </section>
         {selectedEvent&&<p className="scanner-help">Checking passes for {selectedEvent.name}.</p>}
       </div>
     </div>

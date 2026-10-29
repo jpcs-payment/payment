@@ -164,6 +164,18 @@
 .scanner-detail-status { padding: 5px 9px; border-radius: 999px; background: #e8edf3; color: #29445f; font-size: .68rem; font-weight: 700; white-space: nowrap; }
 .scanner-detail-status.ready { background: #e5f5eb; color: #176b38; }
 .scanner-detail-status.paylater { background: #fff3d6; color: #8d5800; }
+.scanner-member-lookup { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.scanner-member-lookup > label { color: var(--muted); font-size: .76rem; font-weight: 700; }
+.scanner-member-lookup > input { box-sizing: border-box; width: 100%; min-width: 0; min-height: 42px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: inherit; font: inherit; }
+.scanner-member-results { display: grid; gap: 7px; max-height: 260px; overflow-y: auto; }
+.scanner-member-result { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; padding: 9px; border: 1px solid var(--border); border-radius: 9px; background: var(--soft); }
+.scanner-member-result > div { display: grid; gap: 3px; min-width: 0; }
+.scanner-member-result b,.scanner-member-result small { overflow-wrap: anywhere; }
+.scanner-member-result b { font-size: .82rem; }
+.scanner-member-result small,.scanner-member-empty,.scanner-member-limit { color: var(--muted); font-size: .72rem; line-height: 1.35; }
+.scanner-member-result button { flex: none; }
+.scanner-member-empty { margin: 2px 0; }
+.scanner-member-limit { padding: 2px 4px; }
 .scanner-details-empty { margin: 10px 0; text-align: center; }
 .scanner-details-footer { display: flex; justify-content: flex-end; padding-top: 4px; }
 
@@ -324,4 +336,16 @@
   .app-shell .review-card { gap: 10px; padding: 12px; }
   .app-shell .table-wrap:not(.member-import-table-wrap) > table tbody tr { background: var(--surface); }
   .app-shell.dark .table-wrap:not(.member-import-table-wrap) > table tbody tr { background: #101a2c; }
+}
+
+/* Keep three passes per row on desktop and stack them on mobile. */
+.app-shell .pass-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 650px) {
+  .app-shell .pass-grid { grid-template-columns: minmax(0, 1fr); }
+  .app-shell .pass-card { gap: 12px; padding: 16px; }
+  .app-shell .pass-event > div { display: grid; gap: 4px; min-width: 0; }
+  .app-shell .pass-card .actual-qr { box-sizing: border-box; width: min(100%, 320px); max-width: 100%; height: auto; aspect-ratio: 1 / 1; object-fit: contain; }
+  .pass-card-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; padding-top: 12px; border-top: 1px solid var(--border); }
+  .pass-card-footer .pass-token { min-width: 0; margin: 0; }
+  .pass-card-footer .pass-hint { flex: 1; min-width: 0; text-align: right; overflow-wrap: anywhere; }
 }
