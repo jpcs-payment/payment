@@ -214,19 +214,9 @@ const downloadReport = (items, filename) => {
 const downloadPaymentReportPdf = async (items, summary) => {
   const [{ jsPDF }, { default: autoTable }] = await Promise.all([import('jspdf'), import('jspdf-autotable')])
   const pdfMoney = amount => `PHP ${Number(amount || 0).toLocaleString('en-PH', { minimumFractionDigits: Number.isInteger(Number(amount || 0)) ? 0 : 2, maximumFractionDigits: 2 })}`
-  const pdf = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' })
+  const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' })
   const pageWidth = pdf.internal.pageSize.getWidth()
   const margin = 38
-  pdf.setTextColor(23, 43, 73)
-  pdf.setFont('helvetica', 'bold')
-  pdf.setFontSize(20)
-  pdf.text('JPCS Payment Report', margin, 42)
-  pdf.setFont('helvetica', 'normal')
-  pdf.setFontSize(9)
-  pdf.setTextColor(104, 119, 137)
-  pdf.text('Filtered payment activity', margin, 58)
-  pdf.text(`Generated ${new Date().toLocaleString('en-PH')}`, pageWidth - margin, 42, { align: 'right' })
-
   const metrics = [
     ['COLLECTED', pdfMoney(summary.collected)],
     ['PENDING', String(summary.pending)],
@@ -268,13 +258,13 @@ const downloadPaymentReportPdf = async (items, summary) => {
   if (!tables.length) tables.push({ year: 0, program: '', rows: [['', 'No payment records match the selected filters.', '', '', '', '', '']] })
   let currentYear = null
   for (const group of tables) {
-    if (currentYear !== null && group.year !== currentYear) { pdf.addPage(); tableY = margin + 10 }
-    else if (tableY > pdf.internal.pageSize.getHeight() - 90) { pdf.addPage(); tableY = margin }
+    if (currentYear !== null && group.year !== currentYear) { pdf.addPage(); tableY = margin + 42 }
+    else if (tableY > pdf.internal.pageSize.getHeight() - 90) { pdf.addPage(); tableY = margin + 42 }
     currentYear = group.year
     pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10); pdf.setTextColor(23, 43, 73)
     pdf.text(`${group.year ? yearLabel(group.year) : 'No matching records'}${group.program ? ` · ${group.program} (${group.rows.length})` : ''}`, margin, tableY)
     autoTable(pdf, {
-      startY: tableY + 7, margin: { left: margin, right: margin, bottom: 34 },
+      startY: tableY + 7, margin: { left: margin, right: margin, top: 78, bottom: 34 },
       head: [['#', 'Event', 'Member Name', 'Check-in Time', 'Method', 'Amount', 'Status']], body: group.rows,
       theme: 'grid', styles: { font: 'helvetica', fontSize: 8, cellPadding: 6, textColor: [38, 52, 71], lineColor: [229, 232, 231], lineWidth: 0.5, overflow: 'linebreak' },
       headStyles: { fillColor: [23, 52, 91], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8 }, alternateRowStyles: { fillColor: [250, 250, 248] },
@@ -287,7 +277,12 @@ const downloadPaymentReportPdf = async (items, summary) => {
         else if (status === 'rejected') data.cell.styles.textColor = [185, 40, 40]
       },
       didDrawPage: () => {
-        pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(112, 123, 133)
+        pdf.setFont('helvetica', 'bold'); pdf.setFontSize(18); pdf.setTextColor(23, 43, 73)
+        pdf.text('JPCS Payment Report', margin, 42)
+        pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9); pdf.setTextColor(104, 119, 137)
+        pdf.text(`Filtered payment activity · ${items.length} payment record${items.length === 1 ? '' : 's'}`, margin, 58)
+        pdf.text(`Generated ${new Date().toLocaleString('en-PH')}`, pageWidth - margin, 42, { align: 'right' })
+        pdf.setFontSize(8); pdf.setTextColor(112, 123, 133)
         pdf.text(`${items.length} payment record${items.length === 1 ? '' : 's'} included`, margin, pdf.internal.pageSize.getHeight() - 16)
         pdf.text(`Page ${pdf.internal.getNumberOfPages()}`, pageWidth - margin, pdf.internal.pageSize.getHeight() - 16, { align: 'right' })
       }

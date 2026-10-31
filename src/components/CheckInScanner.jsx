@@ -168,7 +168,7 @@ export default function CheckInScanner({events,passes,api,onCheckedIn}){
   const attendanceFilename=['jpcs-attendance-report',selectedEvent?.name,attendanceYearFilter!=='all'?`${['','first','second','third','fourth'][Number(attendanceYearFilter)]}-year`:'',attendanceProgramFilter!=='all'?attendanceProgramFilter:'',attendanceFilter!=='all'?attendanceFilter:''].filter(Boolean).map(filenamePart).filter(Boolean).join('-')
   const exportAttendancePdf=async()=>{
     const [{jsPDF},{default:autoTable}]=await Promise.all([import('jspdf'),import('jspdf-autotable')])
-    const pdf=new jsPDF({orientation:'landscape',unit:'pt',format:'a4'})
+    const pdf=new jsPDF({orientation:'portrait',unit:'pt',format:'a4'})
     const margin=38
     const groups=new Map()
     for(const pass of attendance){
