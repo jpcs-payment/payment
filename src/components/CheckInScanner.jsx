@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, Camera, CheckCircle2, Keyboard, QrCode, RefreshCw, ScanLine, X, XCircle } from 'lucide-react'
+import { AlertTriangle, Camera, CheckCircle2, Download, Keyboard, QrCode, RefreshCw, ScanLine, X, XCircle } from 'lucide-react'
 import { BrowserQRCodeReader } from '@zxing/browser'
 
 const passTokenFromValue=value=>{
@@ -14,7 +14,31 @@ const passTokenFromValue=value=>{
   return ''
 }
 
-const formatDateTime=value=>value?new Date(value).toLocaleString('en-PH',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):''
+const formatDateTime=value=>value?new Date(value).toLocaleString('en-PH',{year:'numeric',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):''
+const filenamePart=value=>String(value||'').normalize('NFKD').replace(/[^\w-]+/g,'-').replace(/^-+|-+$/g,'').toLowerCase()
+
+function AttendancePdfPreview({blob,filename,onClose}){
+  const [url,setUrl]=useState('')
+  useEffect(()=>{
+    const objectUrl=URL.createObjectURL(blob)
+    setUrl(objectUrl)
+    return()=>URL.revokeObjectURL(objectUrl)
+  },[blob])
+  useEffect(()=>{
+    const closeOnEscape=event=>{if(event.key==='Escape')onClose()}
+    document.addEventListener('keydown',closeOnEscape)
+    return()=>document.removeEventListener('keydown',closeOnEscape)
+  },[onClose])
+  const download=()=>{
+    const link=document.createElement('a')
+    link.href=url;link.download=`${filename}.pdf`;link.click()
+  }
+  return <div className="modal-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget)onClose()}}><div className="modal pdf-preview-modal" role="dialog" aria-modal="true" aria-labelledby="attendance-pdf-title">
+    <div className="modal-heading"><div><p className="eyebrow">REPORT PREVIEW</p><h2 id="attendance-pdf-title">Attendance report PDF</h2></div><button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18}/></button></div>
+    <iframe className="pdf-preview-frame" src={url||undefined} title="Attendance report PDF preview"/>
+    <div className="modal-actions"><button type="button" className="outline-btn" onClick={onClose}>Close</button><button type="button" className="primary" onClick={download} disabled={!url}><Download size={15}/> Download PDF</button></div>
+  </div></div>
+}
 
 function PassQrPreview({pass,api}){
   const [qr,setQr]=useState('')
@@ -75,6 +99,9 @@ export default function CheckInScanner({events,passes,api,onCheckedIn}){
   const [manual,setManual]=useState('')
   const [memberSearch,setMemberSearch]=useState('')
   const [attendanceFilter,setAttendanceFilter]=useState('all')
+  const [attendanceYearFilter,setAttendanceYearFilter]=useState('all')
+  const [attendanceProgramFilter,setAttendanceProgramFilter]=useState('all')
+  const [attendancePdf,setAttendancePdf]=useState(null)
   const [detailsType,setDetailsType]=useState('')
   const videoRef=useRef(null)
   const controlsRef=useRef(null)
@@ -129,7 +156,8 @@ export default function CheckInScanner({events,passes,api,onCheckedIn}){
       return [member.full_name,member.email,member.student_number].some(value=>String(value||'').toLowerCase().includes(query))
     }).slice(0,8)
   },[eventPasses,memberSearch])
-  const attendance=useMemo(()=>eventPasses.filter(p=>p.checked_in_at&&(attendanceFilter==='all'||(attendanceFilter==='paylater'?p.pay_later:!p.pay_later))).sort((a,b)=>new Date(b.checked_in_at)-new Date(a.checked_in_at)),[eventPasses,attendanceFilter])
+  const attendancePrograms=useMemo(()=>[...new Set(eventPasses.map(pass=>String(pass.registration?.profiles?.program||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b)),[eventPasses])
+  const attendance=useMemo(()=>eventPasses.filter(p=>p.checked_in_at&&(attendanceFilter==='all'||(attendanceFilter==='paylater'?p.pay_later:!p.pay_later))&&(attendanceYearFilter==='all'||String(p.registration?.profiles?.year_level)===attendanceYearFilter)&&(attendanceProgramFilter==='all'||p.registration?.profiles?.program===attendanceProgramFilter)).sort((a,b)=>new Date(b.checked_in_at)-new Date(a.checked_in_at)),[eventPasses,attendanceFilter,attendanceYearFilter,attendanceProgramFilter])
   const checkedCount=eventPasses.filter(p=>p.checked_in_at).length
   const entrancePasses=eventPasses.filter(p=>!p.pay_later)
   const checkedEntranceCount=entrancePasses.filter(p=>p.checked_in_at).length
@@ -137,6 +165,37 @@ export default function CheckInScanner({events,passes,api,onCheckedIn}){
   const payLaterPasses=useMemo(()=>eventPasses.filter(p=>p.pay_later),[eventPasses])
   const remainingPasses=useMemo(()=>entrancePasses.filter(p=>!p.checked_in_at),[entrancePasses])
   const payLaterCount=payLaterPasses.length
+  const attendanceFilename=['jpcs-attendance-report',selectedEvent?.name,attendanceYearFilter!=='all'?`${['','first','second','third','fourth'][Number(attendanceYearFilter)]}-year`:'',attendanceProgramFilter!=='all'?attendanceProgramFilter:'',attendanceFilter!=='all'?attendanceFilter:''].filter(Boolean).map(filenamePart).filter(Boolean).join('-')
+  const exportAttendancePdf=async()=>{
+    const [{jsPDF},{default:autoTable}]=await Promise.all([import('jspdf'),import('jspdf-autotable')])
+    const pdf=new jsPDF({orientation:'landscape',unit:'pt',format:'a4'})
+    const margin=38
+    const groups=new Map()
+    for(const pass of attendance){
+      const member=pass.registration?.profiles||{}
+      const year=Number(member.year_level)||0
+      const program=String(member.program||'').trim()||'Program not specified'
+      const key=`${year}|${program}`
+      if(!groups.has(key))groups.set(key,{year,program,rows:[]})
+      const rows=groups.get(key).rows
+      rows.push([String(rows.length+1),member.full_name||'Member',formatDateTime(pass.checked_in_at)])
+    }
+    const programOrder=value=>/computer science/i.test(value)?0:/computer engineering/i.test(value)?1:2
+    const tables=[...groups.values()].sort((a,b)=>(a.year||99)-(b.year||99)||programOrder(a.program)-programOrder(b.program)||a.program.localeCompare(b.program))
+    let tableY=72
+    if(!tables.length)tables.push({year:0,program:'',rows:[['','No attendance records match the selected filters.','']]})
+    let currentYear=null
+    for(const group of tables){
+      if(currentYear!==null&&group.year!==currentYear){pdf.addPage();tableY=margin+42}
+      else if(tableY>pdf.internal.pageSize.getHeight()-90){pdf.addPage();tableY=margin+42}
+      currentYear=group.year
+      pdf.setFont('helvetica','bold');pdf.setFontSize(10);pdf.setTextColor(23,43,73)
+      pdf.text(`${group.year?`${['','First','Second','Third','Fourth'][group.year]} Year`:'No matching records'}${group.program?` · ${group.program} (${group.rows.length})`:''}`,margin,tableY)
+      autoTable(pdf,{startY:tableY+7,margin:{left:margin,right:margin,top:78,bottom:32},head:[['#','Member Name','Check-in Time']],body:group.rows,theme:'grid',styles:{font:'helvetica',fontSize:9,cellPadding:7,textColor:[38,52,71],lineColor:[229,232,231],lineWidth:.5},headStyles:{fillColor:[23,52,91],textColor:[255,255,255],fontStyle:'bold'},alternateRowStyles:{fillColor:[250,250,248]},columnStyles:{0:{halign:'center',cellWidth:32}},didDrawPage:()=>{pdf.setFont('helvetica','bold');pdf.setFontSize(18);pdf.setTextColor(23,43,73);pdf.text('JPCS Attendance Report',margin,40);pdf.setFont('helvetica','normal');pdf.setFontSize(9);pdf.setTextColor(104,119,137);pdf.text(`${selectedEvent?.name||'Event'} · ${attendance.length} checked-in member${attendance.length===1?'':'s'}`,margin,57);pdf.text(`Generated ${new Date().toLocaleString('en-PH')}`,pdf.internal.pageSize.getWidth()-margin,40,{align:'right'});pdf.setFontSize(8);pdf.setTextColor(112,123,133);pdf.text(`Page ${pdf.internal.getNumberOfPages()}`,pdf.internal.pageSize.getWidth()-margin,pdf.internal.pageSize.getHeight()-16,{align:'right'})}})
+      tableY=(pdf.lastAutoTable?.finalY||tableY)+22
+    }
+    setAttendancePdf({blob:pdf.output('blob'),filename:attendanceFilename})
+  }
   const detailsPasses=detailsType==='checked'?checkedInPasses:detailsType==='qr'?eventPasses:detailsType==='paylater'?payLaterPasses:remainingPasses
   const secureContext=typeof window==='undefined'||window.isSecureContext
   const liveCameraAvailable=secureContext&&!!navigator.mediaDevices?.getUserMedia
@@ -323,9 +382,10 @@ export default function CheckInScanner({events,passes,api,onCheckedIn}){
       </div>
     </div>
     <section className="attendance-history" aria-labelledby="attendance-history-title">
-       <div className="attendance-history-heading"><div><p className="eyebrow">EVENT RECORD</p><h3 id="attendance-history-title">Attendance history</h3></div><label className="attendance-filter">Show <select value={attendanceFilter} onChange={e=>setAttendanceFilter(e.target.value)}><option value="all">All</option><option value="paid">Paid</option><option value="paylater">Pay Later</option></select></label><span>{attendance.length}</span></div>
+       <div className="attendance-history-heading"><div><p className="eyebrow">EVENT RECORD</p><h3 id="attendance-history-title">Attendance history</h3></div><label className="attendance-filter">Payment <select value={attendanceFilter} onChange={e=>setAttendanceFilter(e.target.value)}><option value="all">All</option><option value="paid">Paid</option><option value="paylater">Pay Later</option></select></label><label className="attendance-filter">Year level <select value={attendanceYearFilter} onChange={e=>setAttendanceYearFilter(e.target.value)}><option value="all">All year levels</option><option value="1">First Year</option><option value="2">Second Year</option><option value="3">Third Year</option><option value="4">Fourth Year</option></select></label><label className="attendance-filter">Program <select value={attendanceProgramFilter} onChange={e=>setAttendanceProgramFilter(e.target.value)}><option value="all">All programs</option>{attendancePrograms.map(program=><option key={program} value={program}>{program}</option>)}</select></label><button type="button" className="outline-btn" onClick={()=>exportAttendancePdf().catch(()=>{})} disabled={!selectedEvent}><Download size={15}/> Export PDF</button><span>{attendance.length}</span></div>
        {attendance.length ? <div className="table-wrap"><table><thead><tr><th>Member</th><th>Checked in</th><th>Payment</th></tr></thead><tbody>{attendance.map(pass=><tr key={pass.id}><td data-label="Member"><b>{pass.registration?.profiles?.full_name||'Member'}</b><small className="method">{pass.registration?.profiles?.email||''}</small></td><td data-label="Checked in">{formatDateTime(pass.checked_in_at)}</td><td data-label="Payment">{pass.pay_later?'Pay Later':'Paid'}</td></tr>)}</tbody></table></div> : <p className="muted attendance-empty">No checked-in members match this filter.</p>}
      </section>
-     {detailsType&&<ScannerDetailsModal type={detailsType} passes={detailsPasses} api={api} onClose={()=>setDetailsType('')}/>}
+      {detailsType&&<ScannerDetailsModal type={detailsType} passes={detailsPasses} api={api} onClose={()=>setDetailsType('')}/>}
+      {attendancePdf&&<AttendancePdfPreview blob={attendancePdf.blob} filename={attendancePdf.filename} onClose={()=>setAttendancePdf(null)}/>}
    </div>
 }

@@ -28,6 +28,7 @@ const statusOf = (registration, price) => {
 }
 const initials = s => (s || '').split(/\s+/).filter(Boolean).slice(0, 2).map(x => x[0]).join('').toUpperCase() || 'JP'
 const yearLabel = n => (['', 'First Year', 'Second Year', 'Third Year', 'Fourth Year'][n] || '—')
+const programLabel = value => String(value || '').trim() || 'Program not specified'
 const roleLabel = p => {
   if (!p) return ''
   if (p.role === 'member') return `${yearLabel(p.year_level)} · Member`
@@ -199,12 +200,13 @@ const api = async (path, options = {}, context = 'request') => {
   return data
 }
 
-const downloadReport = items => {
-  const lines = [['Payment ID', 'Member', 'Email', 'Event', 'Amount', 'Method', 'Status', 'Submitted'], ...items.map(p => [p.id, p.registrations?.profiles?.full_name || '', p.registrations?.profiles?.email || '', p.registrations?.events?.name || p.event?.name || '', p.amount, p.method, p.state, p.submitted_at]) ]
+const safeFilenamePart = value => String(value || '').normalize('NFKD').replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase()
+const downloadReport = (items, filename) => {
+  const lines = [['#', 'Event', 'Member Name', 'Program', 'Check-in Time', 'Method', 'Amount', 'Status'], ...items.map((p, index) => [index + 1, p.registrations?.events?.name || p.event?.name || '', p.registrations?.profiles?.full_name || p.registration?.profiles?.full_name || '', p.registrations?.profiles?.program || p.registration?.profiles?.program || '', p.submitted_at || '', p.method || '', p.amount ?? '', p.state || ''])]
   const csv = '\uFEFF' + lines.map(row => row.map(v => `"${String(v ?? '').replaceAll('"', '""')}"`).join(',')).join('\n')
   const a = document.createElement('a')
   a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
-  a.download = 'jpcs-payment-report.csv'
+  a.download = `${filename}.csv`
   a.click()
   URL.revokeObjectURL(a.href)
 }
@@ -247,40 +249,51 @@ const downloadPaymentReportPdf = async (items, summary) => {
     pdf.text(value, x + 10, 104)
   })
 
-  const rows = items.map((payment, index) => {
+  const grouped = new Map()
+  for (const payment of items) {
     const registration = payment.registrations || payment.registration || {}
     const member = registration.profiles || payment.profiles || {}
+    const year = Number(member.year_level) || 0
+    const program = programLabel(member.program)
+    const key = `${year}|${program}`
+    if (!grouped.has(key)) grouped.set(key, { year, program, rows: [] })
     const event = registration.events || payment.event || {}
     const status = String(payment.state || 'pending')
-    return [String(index + 1), event.name || 'Event', member.full_name || payment.member_name || 'JPCS member', member.email || payment.member_email || '', dateTime(payment.submitted_at), payment.method || '', pdfMoney(payment.amount), status.charAt(0).toUpperCase() + status.slice(1)]
-  })
-
-  autoTable(pdf, {
-    startY: 128,
-    margin: { left: margin, right: margin, bottom: 34 },
-    head: [['#', 'Event', 'Member', 'Email', 'Submitted', 'Method', 'Amount', 'Status']],
-    body: rows.length ? rows : [['', 'No payment records match the selected filters.', '', '', '', '', '', '']],
-    theme: 'grid',
-    styles: { font: 'helvetica', fontSize: 8, cellPadding: 6, textColor: [38, 52, 71], lineColor: [229, 232, 231], lineWidth: 0.5, overflow: 'linebreak' },
-    headStyles: { fillColor: [23, 52, 91], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8 },
-    alternateRowStyles: { fillColor: [250, 250, 248] },
-    columnStyles: { 0: { halign: 'center', cellWidth: 26 }, 6: { halign: 'right' }, 7: { fontStyle: 'bold', halign: 'center' } },
-    didParseCell: data => {
-      if (data.section !== 'body' || data.column.index !== 7 || !rows.length) return
-      const status = String(data.cell.raw).toLowerCase()
-      if (status === 'approved') data.cell.styles.textColor = [22, 128, 67]
-      else if (status === 'pending') data.cell.styles.textColor = [180, 120, 0]
-      else if (status === 'rejected') data.cell.styles.textColor = [185, 40, 40]
-    },
-    didDrawPage: () => {
-      const pageCount = pdf.internal.getNumberOfPages()
-      pdf.setFont('helvetica', 'normal')
-      pdf.setFontSize(8)
-      pdf.setTextColor(112, 123, 133)
-      pdf.text(`${items.length} payment record${items.length === 1 ? '' : 's'} included`, margin, pdf.internal.pageSize.getHeight() - 16)
-      pdf.text(`Page ${pageCount}`, pageWidth - margin, pdf.internal.pageSize.getHeight() - 16, { align: 'right' })
-    }
-  })
+    const rows = grouped.get(key).rows
+    rows.push([String(rows.length + 1), event.name || 'Event', member.full_name || payment.member_name || 'JPCS member', dateTime(payment.submitted_at), payment.method || '', pdfMoney(payment.amount), status.charAt(0).toUpperCase() + status.slice(1)])
+  }
+  const programOrder = value => /computer science/i.test(value) ? 0 : /computer engineering/i.test(value) ? 1 : 2
+  const tables = [...grouped.values()].sort((a, b) => (a.year || 99) - (b.year || 99) || programOrder(a.program) - programOrder(b.program) || a.program.localeCompare(b.program))
+  let tableY = 128
+  if (!tables.length) tables.push({ year: 0, program: '', rows: [['', 'No payment records match the selected filters.', '', '', '', '', '']] })
+  let currentYear = null
+  for (const group of tables) {
+    if (currentYear !== null && group.year !== currentYear) { pdf.addPage(); tableY = margin + 10 }
+    else if (tableY > pdf.internal.pageSize.getHeight() - 90) { pdf.addPage(); tableY = margin }
+    currentYear = group.year
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10); pdf.setTextColor(23, 43, 73)
+    pdf.text(`${group.year ? yearLabel(group.year) : 'No matching records'}${group.program ? ` · ${group.program} (${group.rows.length})` : ''}`, margin, tableY)
+    autoTable(pdf, {
+      startY: tableY + 7, margin: { left: margin, right: margin, bottom: 34 },
+      head: [['#', 'Event', 'Member Name', 'Check-in Time', 'Method', 'Amount', 'Status']], body: group.rows,
+      theme: 'grid', styles: { font: 'helvetica', fontSize: 8, cellPadding: 6, textColor: [38, 52, 71], lineColor: [229, 232, 231], lineWidth: 0.5, overflow: 'linebreak' },
+      headStyles: { fillColor: [23, 52, 91], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8 }, alternateRowStyles: { fillColor: [250, 250, 248] },
+      columnStyles: { 0: { halign: 'center', cellWidth: 26 }, 5: { halign: 'right' }, 6: { fontStyle: 'bold', halign: 'center' } },
+      didParseCell: data => {
+        if (data.section !== 'body' || data.column.index !== 6 || !items.length) return
+        const status = String(data.cell.raw).toLowerCase()
+        if (status === 'approved') data.cell.styles.textColor = [22, 128, 67]
+        else if (status === 'pending') data.cell.styles.textColor = [180, 120, 0]
+        else if (status === 'rejected') data.cell.styles.textColor = [185, 40, 40]
+      },
+      didDrawPage: () => {
+        pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(112, 123, 133)
+        pdf.text(`${items.length} payment record${items.length === 1 ? '' : 's'} included`, margin, pdf.internal.pageSize.getHeight() - 16)
+        pdf.text(`Page ${pdf.internal.getNumberOfPages()}`, pageWidth - margin, pdf.internal.pageSize.getHeight() - 16, { align: 'right' })
+      }
+    })
+    tableY = (pdf.lastAutoTable?.finalY || tableY) + 22
+  }
   return pdf.output('blob')
 }
 
@@ -321,7 +334,7 @@ function ModalClose({ onClick }) {
   return <button type="button" className="icon-button" onClick={onClick} aria-label="Close"><X size={18} /></button>
 }
 
-function PaymentReportPdfPreview({ blob, onClose }) {
+function PaymentReportPdfPreview({ blob, filename, onClose }) {
   const [url, setUrl] = useState('')
   useEffect(() => {
     const objectUrl = URL.createObjectURL(blob)
@@ -331,7 +344,7 @@ function PaymentReportPdfPreview({ blob, onClose }) {
   const download = () => {
     const link = document.createElement('a')
     link.href = url
-    link.download = 'jpcs-payment-report.pdf'
+    link.download = `${filename}.pdf`
     link.click()
   }
   return <Modal onClose={onClose} className="pdf-preview-modal">
@@ -562,10 +575,18 @@ function ProfileModal({ profile, onClose, onSaved, notify, setError }) {
 
 function AddMemberModal({ onClose, onCreated, notify }) {
   const [fullName, setFullName] = useState('')
+  const [firstName, setFirstName] = useState('')
+  const [lastName, setLastName] = useState('')
+  const [middleInitial, setMiddleInitial] = useState('')
   const [email, setEmail] = useState('')
+  const [studentNumber, setStudentNumber] = useState('')
+  const [program, setProgram] = useState('')
   const [password, setPassword] = useState('JPCS2026')
   const [yearLevel, setYearLevel] = useState('')
-const [role, setRole] = useState('member')
+  const [sex, setSex] = useState('')
+  const [contactNumber, setContactNumber] = useState('')
+  const [address, setAddress] = useState('')
+  const [role, setRole] = useState('member')
   const [show, setShow] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -578,7 +599,7 @@ const [role, setRole] = useState('member')
     if (yearLevel < '1' || yearLevel > '4') { setErr('Select a valid year level.'); return }
     setBusy(true)
     try {
-      await api('/api/members/create', { method: 'POST', body: JSON.stringify({ fullName: fullName.trim(), email: email.trim(), password, yearLevel: Number(yearLevel), role }) }, 'request')
+      await api('/api/members/create', { method: 'POST', body: JSON.stringify({ fullName: fullName.trim(), firstName, lastName, middleInitial, email: email.trim(), studentNumber, program, password, yearLevel: Number(yearLevel), sex, contactNumber, address, role }) }, 'request')
       notify('Member account created.')
       onCreated()
       onClose()
@@ -591,8 +612,18 @@ const [role, setRole] = useState('member')
     <form onSubmit={save} className="modal-form">
       <label className="form-label" htmlFor="am-name">Full name</label>
       <input id="am-name" className="modal-input" value={fullName} onChange={e => setFullName(e.target.value)} required />
+      <label className="form-label" htmlFor="am-first">First name</label>
+      <input id="am-first" className="modal-input" value={firstName} onChange={e => setFirstName(e.target.value)} />
+      <label className="form-label" htmlFor="am-last">Last name</label>
+      <input id="am-last" className="modal-input" value={lastName} onChange={e => setLastName(e.target.value)} />
+      <label className="form-label" htmlFor="am-middle">Middle initial</label>
+      <input id="am-middle" className="modal-input" value={middleInitial} onChange={e => setMiddleInitial(e.target.value)} maxLength={10} />
       <label className="form-label" htmlFor="am-email">Email address</label>
       <input id="am-email" className="modal-input" type="email" value={email} onChange={e => setEmail(e.target.value)} required />
+      <label className="form-label" htmlFor="am-number">Student number</label>
+      <input id="am-number" className="modal-input" value={studentNumber} onChange={e => setStudentNumber(e.target.value)} maxLength={40} pattern="[A-Za-z0-9-]*" />
+      <label className="form-label" htmlFor="am-program">Program</label>
+      <input id="am-program" className="modal-input" value={program} onChange={e => setProgram(e.target.value)} maxLength={160} placeholder="e.g. Computer Science" />
       <label className="form-label" htmlFor="am-pass">Default password</label>
       <div className="password-row"><input id="am-pass" className="modal-input" type={show ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} required minLength={6} /><button type="button" className="text-button" onClick={() => setShow(s => !s)}>{show ? 'Hide' : 'Show'}</button></div>
       <label className="form-label" htmlFor="am-year">Year level</label>
@@ -603,6 +634,12 @@ const [role, setRole] = useState('member')
         <option value="3">3rd Year</option>
         <option value="4">4th Year</option>
       </select>
+      <label className="form-label" htmlFor="am-sex">Sex (optional)</label>
+      <input id="am-sex" className="modal-input" value={sex} onChange={e => setSex(e.target.value)} maxLength={40} />
+      <label className="form-label" htmlFor="am-contact">Contact number</label>
+      <input id="am-contact" className="modal-input" type="tel" value={contactNumber} onChange={e => setContactNumber(e.target.value)} maxLength={80} />
+      <label className="form-label" htmlFor="am-address">Address</label>
+      <textarea id="am-address" className="modal-input" value={address} onChange={e => setAddress(e.target.value)} maxLength={500} rows={3} />
       <label className="form-label" htmlFor="am-role">Role</label>
       <select id="am-role" className="modal-input" value={role} onChange={e => setRole(e.target.value)}>
         <option value="member">Member</option>
@@ -617,8 +654,17 @@ const [role, setRole] = useState('member')
 
 function MemberEditModal({ member, onClose, onSaved }) {
   const [fullName, setFullName] = useState(member.full_name || '')
+  const [firstName, setFirstName] = useState(member.first_name || '')
+  const [lastName, setLastName] = useState(member.last_name || '')
+  const [middleInitial, setMiddleInitial] = useState(member.middle_initial || '')
+  const [email, setEmail] = useState(member.email || '')
   const [studentNumber, setStudentNumber] = useState(member.student_number || '')
+  const [program, setProgram] = useState(member.program || '')
   const [yearLevel, setYearLevel] = useState(member.year_level ? String(member.year_level) : '')
+  const [sex, setSex] = useState(member.sex || '')
+  const [contactNumber, setContactNumber] = useState(member.contact_number || '')
+  const [address, setAddress] = useState(member.address || '')
+  const [role, setRole] = useState(member.role || 'member')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const save = async event => {
@@ -629,8 +675,17 @@ function MemberEditModal({ member, onClose, onSaved }) {
       await api('/api/members/update', { method: 'PATCH', body: JSON.stringify({
         userId: member.id,
         fullName: fullName.trim(),
+        firstName,
+        lastName,
+        middleInitial,
+        email: email.trim(),
         studentNumber: studentNumber.trim() || null,
-        yearLevel: yearLevel ? Number(yearLevel) : null
+        program: program.trim() || null,
+        yearLevel: yearLevel ? Number(yearLevel) : null,
+        sex: sex.trim() || null,
+        contactNumber: contactNumber.trim() || null,
+        address: address.trim() || null,
+        role
       }) }, 'request')
       onSaved()
       onClose()
@@ -642,14 +697,30 @@ function MemberEditModal({ member, onClose, onSaved }) {
     <form onSubmit={save} className="modal-form">
       <label className="form-label" htmlFor="member-edit-name">Full name</label>
       <input id="member-edit-name" className="modal-input" value={fullName} onChange={event => setFullName(event.target.value)} required minLength={2} maxLength={80} />
+      <label className="form-label" htmlFor="member-edit-first">First name</label>
+      <input id="member-edit-first" className="modal-input" value={firstName} onChange={event => setFirstName(event.target.value)} />
+      <label className="form-label" htmlFor="member-edit-last">Last name</label>
+      <input id="member-edit-last" className="modal-input" value={lastName} onChange={event => setLastName(event.target.value)} />
+      <label className="form-label" htmlFor="member-edit-middle">Middle initial</label>
+      <input id="member-edit-middle" className="modal-input" value={middleInitial} onChange={event => setMiddleInitial(event.target.value)} maxLength={10} />
       <label className="form-label" htmlFor="member-edit-email">Email</label>
-      <input id="member-edit-email" className="modal-input" value={member.email || ''} disabled />
+      <input id="member-edit-email" className="modal-input" type="email" value={email} onChange={event => setEmail(event.target.value)} required />
       <label className="form-label" htmlFor="member-edit-number">Student number</label>
       <input id="member-edit-number" className="modal-input" value={studentNumber} onChange={event => setStudentNumber(event.target.value)} maxLength={40} pattern="[A-Za-z0-9-]*" />
+      <label className="form-label" htmlFor="member-edit-program">Program</label>
+      <input id="member-edit-program" className="modal-input" value={program} onChange={event => setProgram(event.target.value)} maxLength={160} />
       <label className="form-label" htmlFor="member-edit-year">Year level</label>
       <select id="member-edit-year" className="modal-input" value={yearLevel} onChange={event => setYearLevel(event.target.value)}>
         <option value="">Not specified</option><option value="1">1st Year</option><option value="2">2nd Year</option><option value="3">3rd Year</option><option value="4">4th Year</option>
       </select>
+      <label className="form-label" htmlFor="member-edit-sex">Sex</label>
+      <input id="member-edit-sex" className="modal-input" value={sex} onChange={event => setSex(event.target.value)} maxLength={40} />
+      <label className="form-label" htmlFor="member-edit-contact">Contact number</label>
+      <input id="member-edit-contact" className="modal-input" type="tel" value={contactNumber} onChange={event => setContactNumber(event.target.value)} maxLength={80} />
+      <label className="form-label" htmlFor="member-edit-address">Address</label>
+      <textarea id="member-edit-address" className="modal-input" value={address} onChange={event => setAddress(event.target.value)} maxLength={500} rows={3} />
+      <label className="form-label" htmlFor="member-edit-role">Role</label>
+      <select id="member-edit-role" className="modal-input" value={role} onChange={event => setRole(event.target.value)}><option value="member">Member</option><option value="treasurer">Treasurer · Officer</option><option value="auditor">Auditor · Officer</option><option value="admin">Administrator</option></select>
       <div className="modal-actions"><button type="button" className="outline-btn" onClick={onClose} disabled={busy}>Cancel</button><button type="submit" className="primary" disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button></div>
     </form>
   </Modal>
@@ -1134,6 +1205,7 @@ export default function App() {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [filterYear, setFilterYear] = useState('all')
+  const [filterProgram, setFilterProgram] = useState('all')
   const [viewMode, setViewMode] = useState(() => safeGet('jpcs-workspace') || 'admin')
   const [profileMenu, setProfileMenu] = useState(false)
   const [moreOpen, setMoreOpen] = useState(false)
@@ -1210,7 +1282,7 @@ export default function App() {
       const eventFields = 'id,name,description,price,event_date,venue,payment_deadline,active,methods,instructions,payment_instructions,pay_later_enabled,partial_payments_enabled,completed,created_at'
       const paymentFields = 'id,registration_id,amount,method,transaction_reference,receipt_path,state,submitted_at,reviewed_by,reviewed_at,remarks'
       const passFields = 'id,registration_id,token,issued_at,checked_in_at,checked_in_by,pay_later'
-      const profileFields = 'id,full_name,email,student_number,year_level,role'
+      const profileFields = 'id,full_name,first_name,last_name,middle_initial,email,student_number,year_level,program,sex,contact_number,address,role'
       const eventRequest = supabase.from('events').select(eventFields).order('event_date', { ascending: true, nullsFirst: false })
       const isMember = !isAdmin
       const registrationFields = 'id,member_id,event_id,price,created_at,pay_later_started_at,pay_later_due_at'
@@ -1220,7 +1292,7 @@ export default function App() {
       let registrationRequest = supabase.from('registrations').select(`${registrationFields},${registrationRelations}`).order('created_at', { ascending: false })
       if (isMember) registrationRequest = registrationRequest.eq('member_id', profile.id)
       const adminRequests = isAdmin ? Promise.all([
-        supabase.from('payments').select(`id,registration_id,amount,method,transaction_reference,receipt_path,state,submitted_at,reviewed_by,reviewed_at,remarks,registrations(id,member_id,event_id,profiles(full_name,email,student_number,year_level),events(id,name,price,event_date))`).order('submitted_at', { ascending: false }),
+        supabase.from('payments').select(`id,registration_id,amount,method,transaction_reference,receipt_path,state,submitted_at,reviewed_by,reviewed_at,remarks,registrations(id,member_id,event_id,profiles(full_name,email,student_number,year_level,program),events(id,name,price,event_date))`).order('submitted_at', { ascending: false }),
         supabase.from('profiles').select(profileFields).order('full_name')
       ]) : Promise.resolve(null)
       const [e, r, adminData] = await Promise.all([eventRequest, registrationRequest, adminRequests])
@@ -1350,7 +1422,9 @@ export default function App() {
   const membersPageCount = Math.max(1, Math.ceil(filteredMembers.length / 5))
   const currentMembersPage = Math.min(membersPage, membersPageCount)
   const pagedMembers = filteredMembers.slice((currentMembersPage - 1) * 5, currentMembersPage * 5)
-  const reportItems = useMemo(() => payments.filter(p => (filterState === 'all' || p.state === filterState) && (filterMethod === 'all' || p.method === filterMethod) && (filterEvent === 'all' || p.registrations?.event_id === filterEvent) && (filterYear === 'all' || String(p.registrations?.profiles?.year_level) === filterYear) && (!query || `${p.registrations?.profiles?.full_name || ''} ${p.registrations?.profiles?.email || ''}`.toLowerCase().includes(query.toLowerCase())) && (!dateFrom || p.submitted_at >= dateFrom) && (!dateTo || p.submitted_at.slice(0, 10) <= dateTo)), [payments, filterState, filterMethod, filterEvent, filterYear, query, dateFrom, dateTo])
+  const reportPrograms = [...new Set(members.map(member => String(member.program || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b))
+  const reportItems = useMemo(() => payments.filter(p => (filterState === 'all' || p.state === filterState) && (filterMethod === 'all' || p.method === filterMethod) && (filterEvent === 'all' || p.registrations?.event_id === filterEvent) && (filterYear === 'all' || String(p.registrations?.profiles?.year_level) === filterYear) && (filterProgram === 'all' || p.registrations?.profiles?.program === filterProgram) && (!query || `${p.registrations?.profiles?.full_name || ''} ${p.registrations?.profiles?.email || ''}`.toLowerCase().includes(query.toLowerCase())) && (!dateFrom || p.submitted_at >= dateFrom) && (!dateTo || p.submitted_at.slice(0, 10) <= dateTo)), [payments, filterState, filterMethod, filterEvent, filterYear, filterProgram, query, dateFrom, dateTo])
+  const reportFilename = ['jpcs-payment-report', filterEvent !== 'all' ? events.find(event => event.id === filterEvent)?.name : '', filterYear !== 'all' ? `${yearLabel(Number(filterYear))}-year` : '', filterProgram !== 'all' ? filterProgram : '', filterMethod !== 'all' ? filterMethod : '', filterState !== 'all' ? filterState : '', dateFrom ? `from-${dateFrom}` : '', dateTo ? `to-${dateTo}` : ''].filter(Boolean).map(safeFilenamePart).filter(Boolean).join('-')
   const reportCollected = reportItems.filter(p => p.state === 'approved').reduce((sum, payment) => sum + Number(payment.amount || 0), 0)
   const reportPending = reportItems.filter(p => p.state === 'pending').length
   const reportRejected = reportItems.filter(p => p.state === 'rejected').length
@@ -1396,15 +1470,16 @@ export default function App() {
         {page === 'Check-in' && hasAdminRole && <section className="panel live-panel"><PanelTitle eyebrow="LIVE ENTRY DESK" title="Check-in scanner" /><Suspense fallback={<div className="inline-loading">Loading scanner…</div>}><CheckInScanner events={events} passes={passes} api={api} onCheckedIn={applyCheckin} /></Suspense></section>}
          {(page === 'My payments' || page === 'Payments') && <section className="panel live-panel"><PanelTitle eyebrow={isAdmin ? 'MANUAL VERIFICATION' : 'PAYMENT RECORDS'} title={isAdmin ? 'Payment submissions' : 'My payments'} /><div className="report-filters payment-filters">{isAdmin && <label className="payment-filter-field" htmlFor="payment-method-filter"><span>Payment method</span><select id="payment-method-filter" value={paymentMethodFilter} onChange={e => setPaymentMethodFilter(e.target.value)}><option value="all">All methods</option><option value="cash">Cash</option><option value="gcash">GCash</option><option value="maribank">MariBank</option></select></label>}<label className="payment-filter-field" htmlFor="payment-status-filter"><span>Status</span><select id="payment-status-filter" value={paymentStatusFilter} onChange={e => setPaymentStatusFilter(e.target.value)}><option value="all">All statuses</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select></label></div>{isAdmin ? <PayLaterTable registrations={registrations.filter(reg => !query || `${reg.events?.name || ''} ${reg.profiles?.full_name || ''} ${reg.profiles?.email || ''}`.toLowerCase().includes(query.toLowerCase()))} onDelete={handleDeletePayLater} canDelete={profile.role === 'admin'} /> : <MyPayLaterTable registrations={memberRegs} />}<PaymentTable items={visiblePayments} admin={isAdmin} onOpen={openDetail} showCount={isAdmin && page === 'Payments'} /></section>}
         {page === 'My passes' && <section className="panel live-panel"><PanelTitle eyebrow="FULLY PAID EVENTS" title="My entrance passes" /><div className="pass-grid">{passes.filter(p => p.registration?.member_id === userId && !p.pay_later).map(p => <PassCard key={p.id} pass={p} />)}{passes.filter(p => p.registration?.member_id === userId && !p.pay_later).length === 0 && <Empty text="Entrance passes appear after all payments for an event are approved." />}</div></section>}
-        {page === 'Members' && isAdmin && <section className="panel live-panel"><PanelTitle eyebrow="MEMBER DIRECTORY" title={<span className="members-title">Members <span className="member-count-badge" aria-label={`${filteredMembers.length} members`}>{filteredMembers.length.toLocaleString()}</span></span>} action={<div className="member-action-buttons">{profile.role === 'admin' && <button type="button" className="outline-btn small-primary" onClick={() => setModal({ type: 'memberImport' })}><Upload size={15} /> Import Members</button>}<button type="button" className="primary small-primary" onClick={() => setModal({ type: 'addMember' })}><Plus size={15} /> Add member</button></div>} /><div className="report-filters member-filters"><select value={filterYear} onChange={e => setFilterYear(e.target.value)}><option value="all">All year levels</option><option value="1">1st Year</option><option value="2">2nd Year</option><option value="3">3rd Year</option><option value="4">4th Year</option></select><span className="muted">Search by name, email, or student number.</span></div><div className="table-wrap"><table><thead><tr><th>Member</th><th>Year level</th><th>Role</th><th>Email</th><th>Action</th></tr></thead><tbody>{pagedMembers.map(m => <tr key={m.id}><td data-label="Member"><b>{m.full_name}</b><small className="method">{m.email}</small></td><td data-label="Year level">{m.year_level ? `${m.year_level}${m.year_level === 1 ? 'st' : m.year_level === 2 ? 'nd' : m.year_level === 3 ? 'rd' : 'th'} Year` : yearLabel(m.year_level)}</td><td data-label="Role">{m.role === 'admin' ? 'Member/Admin' : 'Member'}</td><td data-label="Email">{m.email}</td><td data-label="Action"><div className="member-row-actions"><button type="button" className="outline-btn small" onClick={() => setModal({ type: 'memberEdit', member: m })}>Edit</button>{profile.role === 'admin' && <button type="button" className="outline-btn small" onClick={() => requestConfirm({ title: 'Reset this member’s password?', message: `${m.full_name} will be signed in with the default password JPCS2026 and must choose a new password at next sign-in.`, confirmText: 'Reset password', onConfirm: async () => { await api('/api/members/reset-password', { method: 'POST', body: JSON.stringify({ userId: m.id }) }, 'request'); notify(`Password reset for ${m.full_name}.`) } })}>Reset password</button>}<button type="button" className="outline-btn small member-delete-btn" disabled={m.role === 'admin' || m.id === userId} title={m.role === 'admin' || m.id === userId ? 'Administrators and your own account cannot be deleted here.' : 'Delete member'} onClick={() => handleDeleteMember(m)}>Delete</button></div></td></tr>)}</tbody></table>{!filteredMembers.length && <Empty text="No member profiles found." />}<PaginationControls total={filteredMembers.length} page={currentMembersPage} onPageChange={setMembersPage} /></div></section>}
-        {page === 'Reports' && isAdmin && <div className="report-page-content"><PanelTitle eyebrow="ORGANIZATION FINANCES" title="Payment report" action={<div className="report-export-actions"><button type="button" className="outline-btn" onClick={() => downloadReport(reportItems)}><Download size={15} /> Export CSV</button><button type="button" className="outline-btn" onClick={async () => { try { const blob = await downloadPaymentReportPdf(reportItems, { collected: reportCollected, pending: reportPending, rejected: reportRejected, approved: reportApproved }); setModal({ type: 'reportPdf', blob }) } catch { notify('Could not generate the PDF report. Please try again.') } }}><FileText size={15} /> Export PDF</button></div>} /><div className="stats-grid report-stats"><Stat icon={<Wallet />} category="COLLECTED" label="Collected" value={money(reportCollected)} color="navy" /><Stat icon={<Clock3 />} category="PENDING" label="Pending" value={reportPending} color="amber" /><Stat icon={<AlertTriangle />} category="REJECTED" label="Rejected" value={reportRejected} color="amber" /><Stat icon={<CheckCircle2 />} category="APPROVED" label="Approved" value={reportApproved} color="green" /></div><div className="report-filters report-page-filters" role="group" aria-label="Payment report filters">
+        {page === 'Members' && isAdmin && <section className="panel live-panel"><PanelTitle eyebrow="MEMBER DIRECTORY" title={<span className="members-title">Members <span className="member-count-badge" aria-label={`${filteredMembers.length} members`}>{filteredMembers.length.toLocaleString()}</span></span>} action={<div className="member-action-buttons">{profile.role === 'admin' && <button type="button" className="outline-btn small-primary" onClick={() => setModal({ type: 'memberImport' })}><Upload size={15} /> Import Members</button>}<button type="button" className="primary small-primary" onClick={() => setModal({ type: 'addMember' })}><Plus size={15} /> Add member</button></div>} /><div className="report-filters member-filters"><select value={filterYear} onChange={e => setFilterYear(e.target.value)}><option value="all">All year levels</option><option value="1">1st Year</option><option value="2">2nd Year</option><option value="3">3rd Year</option><option value="4">4th Year</option></select><span className="muted">Search by name, email, or student number.</span></div><div className="table-wrap"><table><thead><tr><th>Member</th><th>Year level</th><th>Program</th><th>Role</th><th>Email</th><th>Action</th></tr></thead><tbody>{pagedMembers.map(m => <tr key={m.id}><td data-label="Member"><b>{m.full_name}</b><small className="method">{m.email}</small></td><td data-label="Year level">{m.year_level ? `${m.year_level}${m.year_level === 1 ? 'st' : m.year_level === 2 ? 'nd' : m.year_level === 3 ? 'rd' : 'th'} Year` : yearLabel(m.year_level)}</td><td data-label="Program">{m.program || '\u2014'}</td><td data-label="Role">{m.role === 'admin' ? 'Member/Admin' : 'Member'}</td><td data-label="Email">{m.email}</td><td data-label="Action"><div className="member-row-actions"><button type="button" className="outline-btn small" onClick={() => setModal({ type: 'memberEdit', member: m })}>Edit</button>{profile.role === 'admin' && <button type="button" className="outline-btn small" onClick={() => requestConfirm({ title: 'Reset this member’s password?', message: `${m.full_name} will be signed in with the default password JPCS2026 and must choose a new password at next sign-in.`, confirmText: 'Reset password', onConfirm: async () => { await api('/api/members/reset-password', { method: 'POST', body: JSON.stringify({ userId: m.id }) }, 'request'); notify(`Password reset for ${m.full_name}.`) } })}>Reset password</button>}<button type="button" className="outline-btn small member-delete-btn" disabled={m.role === 'admin' || m.id === userId} title={m.role === 'admin' || m.id === userId ? 'Administrators and your own account cannot be deleted here.' : 'Delete member'} onClick={() => handleDeleteMember(m)}>Delete</button></div></td></tr>)}</tbody></table>{!filteredMembers.length && <Empty text="No member profiles found." />}<PaginationControls total={filteredMembers.length} page={currentMembersPage} onPageChange={setMembersPage} /></div></section>}
+        {page === 'Reports' && isAdmin && <div className="report-page-content"><PanelTitle eyebrow="ORGANIZATION FINANCES" title="Payment report" action={<div className="report-export-actions"><button type="button" className="outline-btn" onClick={() => downloadReport(reportItems, reportFilename)}><Download size={15} /> Export CSV</button><button type="button" className="outline-btn" onClick={async () => { try { const blob = await downloadPaymentReportPdf(reportItems, { collected: reportCollected, pending: reportPending, rejected: reportRejected, approved: reportApproved }); setModal({ type: 'reportPdf', blob, filename: reportFilename }) } catch { notify('Could not generate the PDF report. Please try again.') } }}><FileText size={15} /> Export PDF</button></div>} /><div className="stats-grid report-stats"><Stat icon={<Wallet />} category="COLLECTED" label="Collected" value={money(reportCollected)} color="navy" /><Stat icon={<Clock3 />} category="PENDING" label="Pending" value={reportPending} color="amber" /><Stat icon={<AlertTriangle />} category="REJECTED" label="Rejected" value={reportRejected} color="amber" /><Stat icon={<CheckCircle2 />} category="APPROVED" label="Approved" value={reportApproved} color="green" /></div><div className="report-filters report-page-filters" role="group" aria-label="Payment report filters">
           <label><span>Event</span><select value={filterEvent} onChange={e => setFilterEvent(e.target.value)}><option value="all">All events</option>{events.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}</select></label>
           <label><span>Year level</span><select value={filterYear} onChange={e => setFilterYear(e.target.value)}><option value="all">All year levels</option><option value="1">First Year</option><option value="2">Second Year</option><option value="3">Third Year</option><option value="4">Fourth Year</option></select></label>
+          <label><span>Program</span><select value={filterProgram} onChange={e => setFilterProgram(e.target.value)}><option value="all">All programs</option>{reportPrograms.map(program => <option key={program} value={program}>{program}</option>)}</select></label>
           <label><span>Payment method</span><select value={filterMethod} onChange={e => setFilterMethod(e.target.value)}><option value="all">All methods</option><option value="cash">Cash</option><option value="gcash">GCash</option><option value="maribank">MariBank</option></select></label>
           <label><span>Payment status</span><select value={filterState} onChange={e => setFilterState(e.target.value)}><option value="all">All statuses</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select></label>
           <label><span>From date</span><input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} /></label>
           <label><span>To date</span><input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} /></label>
-          <button type="button" className="text-button report-clear-filters" onClick={() => { setFilterState('all'); setFilterMethod('all'); setFilterEvent('all'); setFilterYear('all'); setDateFrom(''); setDateTo('') }}>Clear filters</button>
+          <button type="button" className="text-button report-clear-filters" onClick={() => { setFilterState('all'); setFilterMethod('all'); setFilterEvent('all'); setFilterYear('all'); setFilterProgram('all'); setDateFrom(''); setDateTo('') }}>Clear filters</button>
          </div><PaymentTable items={reportItems} admin={isAdmin} onOpen={openDetail} className="report-table-container" /></div>}
         {page === 'Settings' && <section className="panel live-panel"><PanelTitle eyebrow="ACCOUNT PREFERENCES" title="Settings" /><div className="settings-card"><div><b>Account</b><span>{profile.full_name} · {profile.email}</span></div><ShieldCheck size={22} /></div><div className="settings-card"><div><b>Profile</b><span>Edit your display name, student number, or year level.</span></div><button type="button" className="outline-btn" onClick={() => setModal({ type: 'profileEdit' })}>Edit profile</button></div><div className="settings-card"><div><b>Password</b><span>Update your password using your current password.</span></div><div className="settings-actions"><button type="button" className="outline-btn" onClick={() => setModal({ type: 'passwordChange' })}><KeyRound size={15} />Change password</button></div></div>{hasAdminRole && <div className="settings-card workspace-card"><div><b>Workspace</b><span>Switch between admin and member preview for this account.</span></div><button type="button" className="outline-btn" onClick={() => { const next = isAdmin ? 'member' : 'admin'; setViewMode(next); safeSet('jpcs-workspace', next); setPage('Overview'); notify(isAdmin ? 'Member workspace preview opened.' : 'Admin workspace opened.') }}>{isAdmin ? 'Switch to member view' : 'Switch to admin view'}</button></div>}<button type="button" className="logout-link settings-logout" onClick={signOut}>Sign out</button></section>}
         {page === 'Verify pass' && <section className="panel live-panel checkin-panel"><PanelTitle eyebrow="JPCS EVENT CHECK-IN" title="Entrance pass verification" />{!hasAdminRole ? <ErrorBox text="Only authorized event officers can validate entrance passes." /> : <><p className="muted">Pass token: <b>{location.pathname.split('/').pop()}</b></p><button type="button" className="primary" disabled={busy || checkin?.valid || checkin?.payLater} onClick={checkPass}>{busy ? 'Checking…' : 'Verify and check in'}</button>{checkin && <div className={`checkin-result ${checkin.valid ? 'valid' : 'invalid'}`}>{checkin.valid ? `Valid pass · ${checkin.member} · ${checkin.event}` : checkin.payLater ? `Pay Later · ${checkin.member} · ${checkin.event} · Not paid yet; due ${dateTime(checkin.dueAt)}. This is not an entrance pass yet.` : checkin.checkedIn ? `Already checked in at ${dateTime(checkin.checkedInAt)}` : checkin.error || 'Pass is invalid.'}</div>}</>}</section>}
@@ -1413,7 +1488,7 @@ export default function App() {
     </main>
     <nav className={`bottom-nav ${isAdmin ? 'admin-bottom-nav' : 'member-bottom-nav'}`}>{mobileNav.map(([name, Icon]) => <button key={name} type="button" className={`bottom-nav-btn ${page === name ? 'active' : ''}`} onClick={() => { if (name === 'More') { setMoreOpen(o => !o); return } navigate(name); setMoreOpen(false) }}><Icon size={20} /><span>{name === 'Overview' ? 'Dashboard' : name === 'My payments' ? 'My Payments' : name === 'My passes' ? 'My Passes' : name === 'Payments' ? 'Payments' : name}</span>{name === 'Payments' && pendingBadge > 0 && <i className="bottom-badge">{pendingBadge}</i>}</button>)}{moreOpen && isAdmin && <div className="more-menu"><button type="button" onClick={() => { navigate('Members'); setMoreOpen(false) }}><Users size={16} /> Members</button><button type="button" onClick={() => { navigate('Reports'); setMoreOpen(false) }}><Activity size={16} /> Reports</button><button type="button" onClick={() => { navigate('Settings'); setMoreOpen(false) }}><Settings size={16} /> Settings</button></div>}</nav>
     {modal?.type === 'payment' && <PaymentModal event={modal.event} registration={registrations.find(r => r.event_id === modal.event.id && r.member_id === userId)} onClose={() => setModal(null)} onSubmitted={onPaymentSubmitted} setError={setError} />}
-    {modal?.type === 'reportPdf' && <PaymentReportPdfPreview blob={modal.blob} onClose={() => setModal(null)} />}
+    {modal?.type === 'reportPdf' && <PaymentReportPdfPreview blob={modal.blob} filename={modal.filename} onClose={() => setModal(null)} />}
         {modal?.type === 'paymentSubmitted' && <PaymentSuccessModal amount={modal.amount} eventName={modal.eventName} payLater={modal.payLater} dueAt={modal.dueAt} emailDelivery={modal.emailDelivery} onClose={() => setModal(null)} />}
     {modal?.type === 'paymentDetail' && <PaymentDetailModal payment={modal.payment} admin={isAdmin} profile={profile} onClose={() => setModal(null)} onReview={handleReview} onDelete={handleDeletePayment} requestConfirm={requestConfirm} />}
     {modal?.type === 'event' && <EventModal event={modal.event} onClose={() => setModal(null)} onSaved={() => setRefresh(v => v + 1)} notify={notify} setError={setError} requestConfirm={requestConfirm} />}

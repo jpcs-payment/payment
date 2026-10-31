@@ -207,10 +207,16 @@ Deno.serve(async(req)=>{
     }
     if(action==='members.create'){
       if(profile.role!=='admin')return response({error:'Administrator permissions are required.'},403)
-      const {fullName,email,password,yearLevel,role}=input
+      const {fullName,firstName,lastName,middleInitial,email,studentNumber,program,password,yearLevel,sex,contactNumber,address,role}=input
       if(typeof fullName!=='string'||!fullName.trim())return response({error:'Please enter a valid full name.'},400)
       if(typeof email!=='string'||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()))return response({error:'Please enter a valid email address.'},400)
       if(typeof password!=='string'||password.length<6||password.length>128)return response({error:'Default password must be at least 6 characters.'},400)
+      for(const [field,max] of Object.entries({firstName:100,lastName:100,middleInitial:10,studentNumber:40,program:160,sex:40,contactNumber:80,address:500})){
+        const value=input[field]
+        if(value!=null&&(typeof value!=='string'||value.trim().length>max))return response({error:'One or more member details are too long.'},400)
+      }
+      const trimmedStudent=typeof studentNumber==='string'?studentNumber.trim():''
+      if(trimmedStudent&&!/^[A-Za-z0-9-]+$/.test(trimmedStudent))return response({error:'Student number may contain only letters, numbers, and hyphens.'},400)
       const yl=yearLevel?Number(yearLevel):null
       if(!yl||yl<1||yl>4)return response({error:'Select a valid year level.'},400)
       const trimmedName=fullName.trim()
@@ -226,7 +232,7 @@ Deno.serve(async(req)=>{
       }
       const userId=created.user?.id
       if(!userId)return response({error:'Could not create member account. Please try again.'},500)
-      const {error:profileError}=await admin.from('profiles').insert({id:userId,full_name:trimmedName,email:trimmedEmail,year_level:yl,role:requestedRole,must_change_password:true})
+      const {error:profileError}=await admin.from('profiles').insert({id:userId,full_name:trimmedName,first_name:typeof firstName==='string'?firstName.trim()||null:null,last_name:typeof lastName==='string'?lastName.trim()||null:null,middle_initial:typeof middleInitial==='string'?middleInitial.trim()||null:null,email:trimmedEmail,student_number:trimmedStudent||null,program:typeof program==='string'?program.trim()||null:null,year_level:yl,sex:typeof sex==='string'?sex.trim()||null:null,contact_number:typeof contactNumber==='string'?contactNumber.trim()||null:null,address:typeof address==='string'?address.trim()||null:null,role:requestedRole,must_change_password:true})
       if(profileError){
         await admin.auth.admin.deleteUser(userId).catch(()=>{})
         const msg=profileError.message||''
@@ -247,24 +253,41 @@ Deno.serve(async(req)=>{
     }
     if(action==='members.update'){
       if(profile.role!=='admin')return response({error:'Administrator permissions are required.'},403)
-      const {userId,fullName,studentNumber=null,yearLevel=null}=input
+      const {userId,fullName,firstName='',lastName='',middleInitial='',email,studentNumber=null,program=null,yearLevel=null,sex=null,contactNumber=null,address=null,role}=input
       if(typeof userId!=='string'||!userId)return response({error:'Member ID is required.'},400)
       if(typeof fullName!=='string'||fullName.trim().length<2||fullName.trim().length>80)return response({error:'Enter a name between 2 and 80 characters.'},400)
+      if(typeof email!=='string'||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()))return response({error:'Please enter a valid email address.'},400)
+      const trimmedEmail=email.trim().toLowerCase()
+      const allowedRoles=['member','treasurer','auditor','admin']
+      if(typeof role!=='string'||!allowedRoles.includes(role))return response({error:'Select a valid role.'},400)
+      for(const [field,max] of Object.entries({firstName:100,lastName:100,middleInitial:10,program:160,sex:40,contactNumber:80,address:500})){
+        const value=input[field]
+        if(value!=null&&(typeof value!=='string'||value.trim().length>max))return response({error:'One or more member details are too long.'},400)
+      }
       const trimmedStudent=studentNumber==null?'':String(studentNumber).trim()
       if(trimmedStudent.length>40||trimmedStudent&&!/^[A-Za-z0-9-]+$/.test(trimmedStudent))return response({error:'Student number may contain only letters, numbers, and hyphens.'},400)
       const yl=yearLevel==null||yearLevel===''?null:Number(yearLevel)
       if(yl!==null&&(!Number.isInteger(yl)||yl<1||yl>4))return response({error:'Year level must be between 1 and 4.'},400)
-      const {data:target,error:targetError}=await admin.from('profiles').select('id').eq('id',userId).maybeSingle()
+       const {data:target,error:targetError}=await admin.from('profiles').select('id,email').eq('id',userId).maybeSingle()
       if(targetError)return response({error:'Could not find the member profile.'},500)
-      if(!target)return response({error:'Member profile not found.'},404)
+       if(!target)return response({error:'Member profile not found.'},404)
+       if(trimmedEmail!==String(target.email||'').toLowerCase()){
+         const {data:existingEmail,error:emailError}=await admin.from('profiles').select('id').eq('email',trimmedEmail).neq('id',userId).limit(1).maybeSingle()
+         if(emailError)return response({error:'Could not check email uniqueness.'},500)
+         if(existingEmail)return response({error:'Another member already uses this email address.'},409)
+       }
       if(trimmedStudent){
         const {data:existing,error:studentError}=await admin.from('profiles').select('id').eq('student_number',trimmedStudent).neq('id',userId).limit(1).maybeSingle()
         if(studentError)return response({error:'Could not check student number uniqueness.'},500)
         if(existing)return response({error:'Another member already uses this student number.'},409)
       }
-      const {data:updated,error:updateError}=await admin.from('profiles').update({full_name:fullName.trim(),student_number:trimmedStudent||null,year_level:yl}).eq('id',userId).select().single()
-      if(updateError)return response({error:'Could not update this member profile.'},400)
-      await admin.auth.admin.updateUserById(userId,{user_metadata:{full_name:fullName.trim()}}).catch(()=>{})
+       const {data:updated,error:updateError}=await admin.from('profiles').update({full_name:fullName.trim(),first_name:typeof firstName==='string'?firstName.trim()||null:null,last_name:typeof lastName==='string'?lastName.trim()||null:null,middle_initial:typeof middleInitial==='string'?middleInitial.trim()||null:null,email:trimmedEmail,student_number:trimmedStudent||null,program:typeof program==='string'?program.trim()||null:null,year_level:yl,sex:typeof sex==='string'?sex.trim()||null:null,contact_number:typeof contactNumber==='string'?contactNumber.trim()||null:null,address:typeof address==='string'?address.trim()||null:null,role}).eq('id',userId).select().single()
+       if(updateError)return response({error:'Could not update this member profile.'},400)
+       const {error:authUpdateError}=await admin.auth.admin.updateUserById(userId,{email:trimmedEmail,email_confirm:true,user_metadata:{full_name:fullName.trim()}})
+       if(authUpdateError){
+         await admin.from('profiles').update({email:target.email}).eq('id',userId)
+         return response({error:'Could not update the member email address.'},400)
+       }
       return response({ok:true,profile:updated})
     }
     if(action==='members.resetPassword'){
